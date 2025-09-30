@@ -88,7 +88,9 @@ def retrieve_docs(query: str) -> str:
 instruction = """You are an AI assistant for question-answering tasks.
 Answer to the best of your ability using the context provided.
 Leverage the Tools you are provided to answer questions.
-If you already know the answer to a question, you can respond directly without using the tools."""
+If you already know the answer to a question, you can respond directly without using the tools.
+
+Updated: Testing CI/CD pipeline - 2025-09-30"""
 
 root_agent = Agent(
     name="root_agent",
