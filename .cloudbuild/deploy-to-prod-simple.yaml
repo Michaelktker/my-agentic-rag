@@ -1,0 +1,54 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+steps:
+  # Deploy to Cloud Run Production
+  - name: "gcr.io/cloud-builders/gcloud"
+    id: deploy-production
+    entrypoint: gcloud
+    args:
+      - "run"
+      - "deploy"
+      - "my-agentic-rag"
+      - "--image"
+      - "us-central1-docker.pkg.dev/staging-adk/my-agentic-rag-docker-repo/my-agentic-rag:latest"
+      - "--region"
+      - "us-central1"
+      - "--project" 
+      - "production-adk"
+      - "--platform"
+      - "managed"
+      - "--allow-unauthenticated"
+
+  # Echo production deployment info
+  - name: gcr.io/cloud-builders/gcloud
+    id: echo-production-info
+    entrypoint: /bin/bash
+    args:
+      - "-c"
+      - |
+        echo "_________________________________________________________________________"
+        echo "🎉 Production deployment complete!"
+        echo "🔗 Production URL: https://my-agentic-rag-638797485217.us-central1.run.app"
+        echo "📊 Console: https://console.cloud.google.com/run/detail/us-central1/my-agentic-rag?project=production-adk"
+        echo "_________________________________________________________________________"
+
+substitutions:
+  _PROD_PROJECT_ID: production-adk
+  _REGION: us-central1
+
+logsBucket: gs://${_PROD_PROJECT_ID}-my-agentic-rag-logs-data/build-logs
+options:
+  substitutionOption: ALLOW_LOOSE
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET

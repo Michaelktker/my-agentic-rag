@@ -1,0 +1,60 @@
+# Production deployment trigger configuration
+name: deploy-my-agentic-rag-to-prod
+description: Deploy my-agentic-rag to production environment
+disabled: false
+tags:
+  - production-deployment
+  - my-agentic-rag
+
+# Manual trigger - can be invoked via API or gcloud command
+trigger:
+  manual: {}
+
+build:
+  source:
+    storageSource:
+      bucket: ${_SOURCE_BUCKET}
+      object: ${_SOURCE_OBJECT}
+  steps:
+    - name: "python:3.11-slim"
+      id: deploy-data-ingestion-pipeline-prod
+      entrypoint: bash
+      args:
+        - -c
+        - |
+          cd data_ingestion && pip install uv==0.6.12 --user && cd data_ingestion_pipeline && \
+          uv sync --locked && uv run python submit_pipeline.py
+      env:
+        - "PIPELINE_ROOT=gs://production-adk-my-agentic-rag-rag"
+        - "REGION=us-central1"
+        - "DATA_STORE_REGION=us"
+        - "DATA_STORE_ID=my-agentic-rag-datastore-prod"
+        - "PROJECT_ID=production-adk"
+        - "SERVICE_ACCOUNT=my-agentic-rag-rag@production-adk.iam.gserviceaccount.com"
+        - "PIPELINE_NAME=data-ingestion-pipeline"
+        - "CRON_SCHEDULE="
+        - "DISABLE_CACHING=TRUE"
+        - 'PATH=/usr/local/bin:/usr/bin:~/.local/bin'
+     
+    - name: "gcr.io/cloud-builders/gcloud"
+      id: trigger-deployment
+      entrypoint: gcloud
+      args:
+        - "run"
+        - "deploy"
+        - "my-agentic-rag"
+        - "--image"
+        - "us-central1-docker.pkg.dev/staging-adk/my-agentic-rag-docker-repo/my-agentic-rag:latest"
+        - "--region"
+        - "us-central1"
+        - "--project"
+        - "production-adk"
+
+  logsBucket: gs://production-adk-my-agentic-rag-logs-data/build-logs
+  options:
+    substitutionOption: ALLOW_LOOSE
+    defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+
+substitutions:
+  _PROD_PROJECT_ID: production-adk
+  _REGION: us-central1

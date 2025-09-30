@@ -41,15 +41,23 @@ steps:
       - "deploy"
       - "my-agentic-rag"
       - "--image"
-      - "$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME"
+      - "us-central1-docker.pkg.dev/staging-adk/my-agentic-rag-docker-repo/my-agentic-rag:latest"
       - "--region"
       - "$_REGION"
       - "--project"
       - $_PROD_PROJECT_ID
 
 substitutions:
-  _PROD_PROJECT_ID: YOUR_PROD_PROJECT_ID
+  _PROD_PROJECT_ID: production-adk
   _REGION: us-central1
+  _DATA_STORE_REGION: us
+  _DATA_STORE_ID_PROD: my-agentic-rag-datastore-prod
+  _PIPELINE_GCS_ROOT_PROD: gs://production-adk-my-agentic-rag-rag
+  _PIPELINE_SA_EMAIL_PROD: my-agentic-rag-rag@production-adk.iam.gserviceaccount.com
+  _PIPELINE_NAME: data-ingestion-pipeline
+  _PIPELINE_CRON_SCHEDULE: ""
+  _ARTIFACT_REGISTRY_REPO_NAME: my-agentic-rag-docker-repo
+  _CONTAINER_NAME: my-agentic-rag
 
 logsBucket: gs://${PROJECT_ID}-my-agentic-rag-logs-data/build-logs
 options:

@@ -115,32 +115,20 @@ steps:
         echo "HTTP link: https://console.cloud.google.com/storage/browser/${_BUCKET_NAME_LOAD_TEST_RESULTS}/results-$${_TIMESTAMP}"
         echo "_________________________________________________________________________"
 
-  # Trigger Prod Deployment
+  # Production deployment info
   - name: gcr.io/cloud-builders/gcloud
-    id: trigger-prod-deployment
-    entrypoint: gcloud
-    args:
-      - "beta"
-      - "builds"
-      - "triggers"
-      - "run"
-      - "deploy-my-agentic-rag"
-      - "--region"
-      - "$LOCATION"
-      - "--project"
-      - "$PROJECT_ID"
-      - "--sha"
-      - $COMMIT_SHA
-
-  - name: gcr.io/cloud-builders/gcloud
-    id: echo-view-build-trigger-link
+    id: echo-production-deployment-info
     entrypoint: /bin/bash
     args:
       - "-c"
       - |
         echo "_________________________________________________________________________"
-        echo "Production deployment triggered. View progress and / or approve on the Cloud Build Console:"
-        echo "https://console.cloud.google.com/cloud-build/builds;region=$LOCATION"
+        echo "✅ Staging deployment successful!"
+        echo "📋 To deploy to production, run:"
+        echo "gcloud builds submit --config=.cloudbuild/deploy-to-prod.yaml --project=production-adk --region=us-central1 --substitutions=_SOURCE_BUCKET=${_BUCKET_NAME_LOAD_TEST_RESULTS}"
+        echo ""
+        echo "🔗 Staging URL: $(cat staging_url.txt)"
+        echo "🔗 Load test results: https://console.cloud.google.com/storage/browser/${_BUCKET_NAME_LOAD_TEST_RESULTS}"
         echo "_________________________________________________________________________"
 
 substitutions:
