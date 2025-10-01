@@ -47,6 +47,7 @@ jobs:
             --config=.cloudbuild/staging.yaml \
             --project=${{ env.STAGING_PROJECT_ID }} \
             --region=${{ env.REGION }} \
+            --substitutions=PROJECT_ID=${{ env.STAGING_PROJECT_ID }} \
             --format="value(name)" \
             --async)
 

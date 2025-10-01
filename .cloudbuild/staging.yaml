@@ -133,7 +133,6 @@ steps:
 
 substitutions:
   _STAGING_PROJECT_ID: staging-adk
-  _PRODUCTION_PROJECT_ID: production-adk
   _REGION: us-central1
   _DATA_STORE_REGION: global
   _DATA_STORE_ID_STAGING: my-agentic-rag-datastore-staging
