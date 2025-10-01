@@ -145,6 +145,7 @@ substitutions:
   _BUCKET_NAME_LOAD_TEST_RESULTS: staging-adk-my-agentic-rag-load-test-results
 
 logsBucket: gs://${PROJECT_ID}-my-agentic-rag-logs-data/build-logs
+serviceAccount: projects/staging-adk/serviceAccounts/github-actions@staging-adk.iam.gserviceaccount.com
 options:
   substitutionOption: ALLOW_LOOSE
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
