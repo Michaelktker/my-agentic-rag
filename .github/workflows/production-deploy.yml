@@ -123,12 +123,14 @@ jobs:
           echo "🚀 Starting production deployment..."
           
           # Submit build and capture ID
-          BUILD_ID="$(gcloud builds submit \
+          BUILD_OUTPUT="$(gcloud builds submit \
             --config=.cloudbuild/deploy-to-prod.yaml \
             --project=${{ env.PROD_PROJECT_ID }} \
             --region=${{ env.REGION }} \
-            --async \
-            --format='value(metadata.build.id)')"
+            --async)"
+            
+          # Extract build ID from the output
+          BUILD_ID="$(echo "$BUILD_OUTPUT" | grep -o 'builds/[^]]*' | cut -d'/' -f2)"
           
           echo "build_id=$BUILD_ID" >> $GITHUB_OUTPUT
           echo "� Build ID: $BUILD_ID"
