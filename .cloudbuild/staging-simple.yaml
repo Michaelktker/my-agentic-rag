@@ -36,7 +36,7 @@ steps:
           --region ${_REGION} \
           --project ${_STAGING_PROJECT_ID} \
           --memory 4Gi \
-          --no-allow-unauthenticated \
+          --allow-unauthenticated \
           --no-cpu-throttling \
           --set-env-vars COMMIT_SHA=$COMMIT_SHA,DATA_STORE_ID=my-agentic-rag-datastore,DATA_STORE_REGION=us \
           --labels created-by=adk \
