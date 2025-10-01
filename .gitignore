@@ -195,3 +195,7 @@ my_env.tfvars
 .saved_chats
 .env
 .requirements.txt
+
+# Google Cloud SDK
+google-cloud-sdk/
+google-cloud-cli-linux-x86_64.tar.gz
