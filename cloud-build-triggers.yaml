@@ -1,0 +1,145 @@
+# Enhanced Cloud Build trigger with approval workflow for production
+# This configuration can be imported via gcloud or used as reference for Terraform
+
+apiVersion: cloudbuild.googleapis.com/v1
+kind: BuildTrigger
+metadata:
+  name: production-deployment-with-approval
+  project: production-adk
+spec:
+  description: "Production deployment trigger with approval workflow"
+  disabled: false
+  tags:
+    - production
+    - approval-required
+    - my-agentic-rag
+
+  # GitHub repository configuration
+  github:
+    owner: Michaelktker
+    name: my-agentic-rag
+    push:
+      branch: ^main$
+
+  # Approval configuration
+  approvalConfig:
+    approvalRequired: true
+
+  # Build configuration
+  build:
+    # Use the enhanced production deployment configuration
+    configPath: .cloudbuild/deploy-to-prod.yaml
+    
+    # Environment-specific substitutions
+    substitutions:
+      _PROD_PROJECT_ID: production-adk
+      _REGION: us-central1
+      _ENVIRONMENT: production
+      
+      # Data pipeline configuration
+      _PIPELINE_GCS_ROOT_PROD: gs://production-adk-my-agentic-rag-rag
+      _PIPELINE_SA_EMAIL_PROD: my-agentic-rag-rag@production-adk.iam.gserviceaccount.com
+      _PIPELINE_NAME: data-ingestion-pipeline
+      _PIPELINE_CRON_SCHEDULE: ""
+      _DISABLE_CACHING: "TRUE"
+      
+      # Discovery Engine configuration
+      _DATA_STORE_ID_PROD: my-agentic-rag-datastore-prod
+      _DATA_STORE_REGION: us
+      
+      # Container configuration
+      _ARTIFACT_REGISTRY_REPO_NAME: my-agentic-rag-docker-repo
+      _CONTAINER_NAME: my-agentic-rag
+
+    # Logging configuration
+    logsBucket: gs://production-adk-my-agentic-rag-logs-data/build-logs
+    options:
+      substitutionOption: ALLOW_LOOSE
+      defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+      machineType: E2_HIGHCPU_8  # Use more powerful machine for production builds
+
+  # File inclusion filters (only trigger on relevant changes)
+  includedFiles:
+    - "app/**"
+    - "data_ingestion/**"
+    - ".cloudbuild/**"
+    - "pyproject.toml"
+    - "uv.lock"
+
+  # Exclude files that shouldn't trigger production deployments
+  ignoredFiles:
+    - "README.md"
+    - "docs/**"
+    - "notebooks/**"
+    - "tests/load_test/**"
+    - "*.md"
+
+---
+# Staging deployment trigger (automatic, no approval required)
+apiVersion: cloudbuild.googleapis.com/v1
+kind: BuildTrigger
+metadata:
+  name: staging-deployment-automatic
+  project: staging-adk
+spec:
+  description: "Automatic staging deployment on main branch push"
+  disabled: false
+  tags:
+    - staging
+    - automatic
+    - my-agentic-rag
+
+  # GitHub repository configuration
+  github:
+    owner: Michaelktker
+    name: my-agentic-rag
+    push:
+      branch: ^main$
+
+  # Build configuration
+  build:
+    configPath: .cloudbuild/staging.yaml
+    
+    # Staging-specific substitutions
+    substitutions:
+      _STAGING_PROJECT_ID: staging-adk
+      _REGION: us-central1
+      _ENVIRONMENT: staging
+      
+      # Load test configuration
+      _BUCKET_NAME_LOAD_TEST_RESULTS: staging-adk-my-agentic-rag-load-test-results
+      
+      # Container configuration
+      _CONTAINER_NAME: my-agentic-rag
+      _ARTIFACT_REGISTRY_REPO_NAME: my-agentic-rag-docker-repo
+      
+      # Data pipeline configuration
+      _PIPELINE_GCS_ROOT_STAGING: gs://staging-adk-my-agentic-rag-rag
+      _PIPELINE_SA_EMAIL_STAGING: my-agentic-rag-rag@staging-adk.iam.gserviceaccount.com
+      _PIPELINE_CRON_SCHEDULE: "0 2 * * *"
+      
+      # Discovery Engine configuration
+      _DATA_STORE_ID_STAGING: my-agentic-rag-datastore
+      _DATA_STORE_REGION: us
+
+    # Logging configuration
+    logsBucket: gs://staging-adk-my-agentic-rag-logs-data/build-logs
+    options:
+      substitutionOption: ALLOW_LOOSE
+      defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+
+  # File inclusion filters
+  includedFiles:
+    - "app/**"
+    - "data_ingestion/**"
+    - "tests/**"
+    - ".cloudbuild/**"
+    - "pyproject.toml"
+    - "uv.lock"
+
+  # Exclude documentation and non-functional changes
+  ignoredFiles:
+    - "README.md"
+    - "docs/**" 
+    - "notebooks/**"
+    - "*.md"

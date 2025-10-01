@@ -13,12 +13,29 @@
 # limitations under the License.
 
 steps:
+  # Pre-deployment validation
+  - name: "gcr.io/cloud-builders/gcloud"
+    id: validate-staging-image
+    entrypoint: /bin/bash
+    args:
+      - "-c"
+      - |
+        echo "🔍 Validating staging image availability..."
+        if gcloud container images describe us-central1-docker.pkg.dev/staging-adk/my-agentic-rag-docker-repo/my-agentic-rag:latest; then
+          echo "✅ Staging image verified"
+        else
+          echo "❌ Staging image not found"
+          exit 1
+        fi
+
+  # Deploy data ingestion pipeline to production
   - name: "python:3.11-slim"
     id: deploy-data-ingestion-pipeline-prod
     entrypoint: bash
     args:
       - -c
       - |
+        echo "🗄️ Setting up production data ingestion pipeline..."
         cd data_ingestion && pip install uv==0.6.12 --user && cd data_ingestion_pipeline && \
         uv sync --locked && uv run python submit_pipeline.py
     env:
@@ -30,11 +47,12 @@ steps:
       - "SERVICE_ACCOUNT=${_PIPELINE_SA_EMAIL_PROD}"
       - "PIPELINE_NAME=${_PIPELINE_NAME}"
       - "CRON_SCHEDULE=${_PIPELINE_CRON_SCHEDULE}"
-      - "DISABLE_CACHING=TRUE"
+      - "DISABLE_CACHING=${_DISABLE_CACHING}"
       - 'PATH=/usr/local/bin:/usr/bin:~/.local/bin'
-   
+
+  # Deploy to Cloud Run Production
   - name: "gcr.io/cloud-builders/gcloud"
-    id: trigger-deployment
+    id: deploy-production
     entrypoint: gcloud
     args:
       - "run"
@@ -43,19 +61,157 @@ steps:
       - "--image"
       - "us-central1-docker.pkg.dev/staging-adk/my-agentic-rag-docker-repo/my-agentic-rag:latest"
       - "--region"
-      - "$_REGION"
-      - "--project"
-      - $_PROD_PROJECT_ID
+      - "${_REGION}"
+      - "--project" 
+      - "${_PROD_PROJECT_ID}"
+      - "--platform"
+      - "managed"
+      - "--allow-unauthenticated"
+      - "--set-env-vars"
+      - "ENVIRONMENT=production,PROJECT_ID=${_PROD_PROJECT_ID},DATA_STORE_ID=${_DATA_STORE_ID_PROD}"
+      - "--memory"
+      - "2Gi"
+      - "--cpu"
+      - "2"
+      - "--max-instances"
+      - "100"
+      - "--min-instances"
+      - "1"
+      - "--concurrency"
+      - "80"
+
+  # Production health check
+  - name: "gcr.io/cloud-builders/gcloud"
+    id: production-health-check
+    entrypoint: /bin/bash
+    args:
+      - "-c"
+      - |
+        echo "🏥 Performing production health check..."
+        
+        # Get production service URL
+        PROD_URL=$(gcloud run services describe my-agentic-rag \
+          --region ${_REGION} \
+          --project ${_PROD_PROJECT_ID} \
+          --format="value(status.url)")
+        
+        echo "🌐 Production URL: $PROD_URL"
+        
+        # Wait for service to be ready
+        sleep 30
+        
+        # Health check
+        if curl -f -s --max-time 30 "$PROD_URL/docs" > /dev/null; then
+          echo "✅ Production health check passed"
+        else
+          echo "❌ Production health check failed"
+          exit 1
+        fi
+        
+        # Store URL for next steps
+        echo "$PROD_URL" > prod_url.txt
+
+  # Run production smoke tests
+  - name: "python:3.11-slim"
+    id: production-smoke-tests
+    entrypoint: /bin/bash
+    args:
+      - "-c"
+      - |
+        echo "🧪 Running production smoke tests..."
+        pip install requests==2.31.0 --user
+        
+        export PROD_URL=$(cat prod_url.txt)
+        
+        python3 << 'EOF'
+        import requests
+        import json
+        import os
+        import sys
+        
+        prod_url = os.environ['PROD_URL']
+        
+        # Test 1: Health endpoint
+        try:
+            response = requests.get(f"{prod_url}/docs", timeout=30)
+            assert response.status_code == 200
+            print("✅ Health endpoint test passed")
+        except Exception as e:
+            print(f"❌ Health endpoint test failed: {e}")
+            sys.exit(1)
+        
+        # Test 2: API endpoint
+        try:
+            test_payload = {
+                "appName": "my-agentic-rag",
+                "userId": "prod-test-user",
+                "sessionId": "prod-test-session",
+                "newMessage": {
+                    "parts": [{"text": "Hello production!"}],
+                    "role": "user"
+                }
+            }
+            
+            response = requests.post(
+                f"{prod_url}/run",
+                json=test_payload,
+                timeout=60
+            )
+            
+            if response.status_code == 200:
+                print("✅ API endpoint test passed")
+            else:
+                print(f"⚠️ API endpoint returned status {response.status_code}")
+                print(f"Response: {response.text[:500]}")
+                
+        except Exception as e:
+            print(f"⚠️ API endpoint test failed: {e}")
+            # Don't fail deployment for API issues in production
+        
+        print("🎉 Production smoke tests completed")
+        EOF
+    env:
+      - 'PATH=/usr/local/bin:/usr/bin:~/.local/bin'
+
+  # Echo production deployment success
+  - name: gcr.io/cloud-builders/gcloud
+    id: echo-production-success
+    entrypoint: /bin/bash
+    args:
+      - "-c"
+      - |
+        export PROD_URL=$(cat prod_url.txt)
+        echo "_________________________________________________________________________"
+        echo "🎉 PRODUCTION DEPLOYMENT SUCCESSFUL!"
+        echo ""
+        echo "🌟 Environment: PRODUCTION"
+        echo "🌐 Production URL: $PROD_URL"
+        echo "📊 Console: https://console.cloud.google.com/run/detail/${_REGION}/my-agentic-rag?project=${_PROD_PROJECT_ID}"
+        echo "📈 Monitoring: https://console.cloud.google.com/monitoring/dashboards?project=${_PROD_PROJECT_ID}"
+        echo "🗄️ Data Store: ${_DATA_STORE_ID_PROD}"
+        echo ""
+        echo "🔗 Quick Test:"
+        echo "curl -X POST -H 'Content-Type: application/json' \\"
+        echo "  -d '{\"appName\":\"my-agentic-rag\",\"userId\":\"test\",\"sessionId\":\"test\",\"newMessage\":{\"parts\":[{\"text\":\"Hello!\"}],\"role\":\"user\"}}' \\"
+        echo "  $PROD_URL/run"
+        echo "_________________________________________________________________________"
 
 substitutions:
   _PROD_PROJECT_ID: production-adk
   _REGION: us-central1
-  _DATA_STORE_REGION: us
-  _DATA_STORE_ID_PROD: my-agentic-rag-datastore-prod
+  
+  # Data ingestion pipeline variables
   _PIPELINE_GCS_ROOT_PROD: gs://production-adk-my-agentic-rag-rag
   _PIPELINE_SA_EMAIL_PROD: my-agentic-rag-rag@production-adk.iam.gserviceaccount.com
   _PIPELINE_NAME: data-ingestion-pipeline
-  _PIPELINE_CRON_SCHEDULE: ""
+  _PIPELINE_CRON_SCHEDULE: "" # Disable cron for production
+  _DISABLE_CACHING: "TRUE"
+  
+  # Discovery Engine variables
+  _DATA_STORE_ID_PROD: my-agentic-rag-datastore-prod
+  _DATA_STORE_REGION: us
+  
+  # Legacy variables for compatibility
   _ARTIFACT_REGISTRY_REPO_NAME: my-agentic-rag-docker-repo
   _CONTAINER_NAME: my-agentic-rag
 

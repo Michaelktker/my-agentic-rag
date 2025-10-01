@@ -1,0 +1,113 @@
+---
+# GitHub Actions workflow for automated staging deployments
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'data_ingestion/**'
+      - 'tests/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.cloudbuild/**'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual deployment'
+        required: false
+        default: 'Manual deployment'
+
+env:
+  STAGING_PROJECT_ID: staging-adk
+  REGION: us-central1
+
+jobs:
+  staging-deploy:
+    name: Deploy to Staging Environment
+    runs-on: ubuntu-latest
+    environment: staging
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ env.STAGING_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Trigger Cloud Build for Staging
+        id: build
+        run: |
+          build_id=$(gcloud builds submit \
+            --config=.cloudbuild/staging.yaml \
+            --project=${{ env.STAGING_PROJECT_ID }} \
+            --region=${{ env.REGION }} \
+            --format="value(name)" \
+            --async)
+
+          echo "build_id=$build_id" >> $GITHUB_OUTPUT
+          echo "🚀 Staging build triggered: $build_id"
+
+      - name: Wait for build completion
+        run: |
+          echo "⏳ Waiting for build completion..."
+          gcloud builds wait ${{ steps.build.outputs.build_id }} \
+            --project=${{ env.STAGING_PROJECT_ID }} \
+            --region=${{ env.REGION }}
+
+      - name: Get build status
+        id: status
+        run: |
+          status=$(gcloud builds describe ${{ steps.build.outputs.build_id }} \
+            --project=${{ env.STAGING_PROJECT_ID }} \
+            --region=${{ env.REGION }} \
+            --format="value(status)")
+
+          echo "status=$status" >> $GITHUB_OUTPUT
+
+          if [ "$status" = "SUCCESS" ]; then
+            echo "✅ Staging deployment successful!"
+          else
+            echo "❌ Staging deployment failed with status: $status"
+            exit 1
+          fi
+
+      - name: Comment on PR (if applicable)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `🚀 **Staging Deployment Complete**\n\n✅ Status: ${{ steps.status.outputs.status }}\n🔗 Build: https://console.cloud.google.com/cloud-build/builds;region=${{ env.REGION }}?project=${{ env.STAGING_PROJECT_ID }}\n🌐 Staging URL: https://my-agentic-rag-454188184539.us-central1.run.app`
+            })
+
+      - name: Create deployment status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const state = '${{ steps.status.outputs.status }}' === 'SUCCESS' ? 'success' : 'failure';
+            github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: context.payload.deployment?.id || 0,
+              state: state,
+              environment: 'staging',
+              environment_url: 'https://my-agentic-rag-454188184539.us-central1.run.app',
+              description: 'Staging deployment via Cloud Build'
+            });
