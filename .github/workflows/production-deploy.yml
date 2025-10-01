@@ -132,6 +132,10 @@ jobs:
           # Extract build ID from the output
           BUILD_ID="$(echo "$BUILD_OUTPUT" | grep -o 'builds/[^]]*' | cut -d'/' -f2)"
           
+          # Debug: Show what we extracted
+          echo "DEBUG: BUILD_OUTPUT=$BUILD_OUTPUT"
+          echo "DEBUG: Extracted BUILD_ID=$BUILD_ID"
+          
           echo "build_id=$BUILD_ID" >> $GITHUB_OUTPUT
           echo "� Build ID: $BUILD_ID"
           
