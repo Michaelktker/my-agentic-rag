@@ -115,44 +115,29 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Deploy to Production with Data Pipeline
+      - name: Deploy to Production (submit & stream logs)
         id: build
         run: |
+          set -euo pipefail
+          
           echo "🚀 Starting production deployment..."
-
-          build_id=$(gcloud builds submit \
+          
+          # Submit build and capture ID
+          BUILD_ID="$(gcloud builds submit \
             --config=.cloudbuild/deploy-to-prod.yaml \
             --project=${{ env.PROD_PROJECT_ID }} \
             --region=${{ env.REGION }} \
-            --format="value(name)" \
-            --async)
-
-          echo "build_id=$build_id" >> $GITHUB_OUTPUT
-          echo "🔨 Production build triggered: $build_id"
-
-      - name: Wait for deployment completion
-        run: |
-          echo "⏳ Waiting for production deployment..."
-          gcloud builds wait ${{ steps.build.outputs.build_id }} \
-            --project=${{ env.PROD_PROJECT_ID }} \
-            --region=${{ env.REGION }}
-
-      - name: Get deployment status
-        id: status
-        run: |
-          status=$(gcloud builds describe ${{ steps.build.outputs.build_id }} \
-            --project=${{ env.PROD_PROJECT_ID }} \
-            --region=${{ env.REGION }} \
-            --format="value(status)")
-
-          echo "status=$status" >> $GITHUB_OUTPUT
-
-          if [ "$status" = "SUCCESS" ]; then
-            echo "✅ Production deployment successful!"
-          else
-            echo "❌ Production deployment failed with status: $status"
-            exit 1
-          fi
+            --async \
+            --format='value(metadata.build.id)')"
+          
+          echo "build_id=$BUILD_ID" >> $GITHUB_OUTPUT
+          echo "� Build ID: $BUILD_ID"
+          
+          # Stream logs and wait for completion (exits with build status)
+          echo "📺 Streaming build logs..."
+          gcloud builds log --region=${{ env.REGION }} --stream "$BUILD_ID"
+          
+          echo "✅ Production deployment completed successfully!"
 
       - name: Validate production deployment
         run: |
@@ -175,7 +160,7 @@ jobs:
           fi
 
       - name: Create GitHub release
-        if: steps.status.outputs.status == 'SUCCESS'
+        if: success()
         uses: actions/github-script@v7
         with:
           script: |
@@ -196,6 +181,5 @@ jobs:
         run: |
           echo "❌ Production deployment failed"
           echo "🔨 Build ID: ${{ steps.build.outputs.build_id || 'N/A' }}"
-          echo "📊 Status: ${{ steps.status.outputs.status || 'Unknown' }}"
-          echo "🔗 Build Logs: https://console.cloud.google.com/cloud-build/builds;region=${{ env.REGION }}?project=${{ env.PROD_PROJECT_ID }}"
+          echo " Build Logs: https://console.cloud.google.com/cloud-build/builds;region=${{ env.REGION }}?project=${{ env.PROD_PROJECT_ID }}"
           echo "**Action Required:** Please investigate the build logs and retry deployment."
