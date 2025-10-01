@@ -26,7 +26,7 @@ steps:
       - "REGION=${_REGION}"
       - "DATA_STORE_REGION=${_DATA_STORE_REGION}"
       - "DATA_STORE_ID=${_DATA_STORE_ID_STAGING}"
-      - "PROJECT_ID=${_STAGING_PROJECT_ID}"
+      - "STAGING_PROJECT_ID=${_STAGING_PROJECT_ID}"
       - "SERVICE_ACCOUNT=${_PIPELINE_SA_EMAIL_STAGING}"
       - "PIPELINE_NAME=${_PIPELINE_NAME}"
       - 'PATH=/usr/local/bin:/usr/bin:~/.local/bin'
@@ -36,7 +36,7 @@ steps:
       [
         "build",
         "-t",
-        "$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME",
+        "$_REGION-docker.pkg.dev/${_STAGING_PROJECT_ID}/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME",
         "--build-arg",
         "COMMIT_SHA=$COMMIT_SHA",
         ".",
@@ -45,7 +45,7 @@ steps:
     args:
       [
         "push",
-        "$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME",
+        "$_REGION-docker.pkg.dev/${_STAGING_PROJECT_ID}/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME",
       ]
 
   # Deploy to Staging
@@ -57,7 +57,7 @@ steps:
       - "deploy"
       - "my-agentic-rag"
       - "--image"
-      - "$_REGION-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME"
+      - "$_REGION-docker.pkg.dev/${_STAGING_PROJECT_ID}/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME"
       - "--region"
       - "${_REGION}"
       - "--project"
