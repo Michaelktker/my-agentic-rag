@@ -97,8 +97,10 @@ jobs:
     environment: production
 
     permissions:
-      contents: read
+      contents: write
       id-token: write
+      issues: write
+      pull-requests: write
 
     steps:
       - name: Checkout code
@@ -191,13 +193,9 @@ jobs:
 
       - name: Notify on failure
         if: failure()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `🚨 Production Deployment Failed - ${new Date().toISOString().slice(0, 10)}`,
-              body: `❌ **Production deployment failed**\n\n🔨 Build ID: ${{ steps.build.outputs.build_id }}\n📊 Status: ${{ steps.status.outputs.status }}\n🔗 Build Logs: https://console.cloud.google.com/cloud-build/builds;region=${{ env.REGION }}?project=${{ env.PROD_PROJECT_ID }}\n\n**Action Required:** Please investigate the build logs and retry deployment.`,
-              labels: ['deployment', 'production', 'urgent']
-            });
+        run: |
+          echo "❌ Production deployment failed"
+          echo "🔨 Build ID: ${{ steps.build.outputs.build_id || 'N/A' }}"
+          echo "📊 Status: ${{ steps.status.outputs.status || 'Unknown' }}"
+          echo "🔗 Build Logs: https://console.cloud.google.com/cloud-build/builds;region=${{ env.REGION }}?project=${{ env.PROD_PROJECT_ID }}"
+          echo "**Action Required:** Please investigate the build logs and retry deployment."
