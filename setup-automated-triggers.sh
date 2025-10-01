@@ -97,6 +97,7 @@ setup_workload_identity_federation() {
                 --workload-identity-pool=github-pool \
                 --display-name="GitHub Actions Provider" \
                 --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository" \
+                --attribute-condition="assertion.repository=='Michaelktker/my-agentic-rag'" \
                 --issuer-uri="https://token.actions.githubusercontent.com"
         fi
         
