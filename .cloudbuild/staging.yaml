@@ -139,7 +139,7 @@ substitutions:
   _PIPELINE_GCS_ROOT_STAGING: gs://staging-adk-my-agentic-rag-pipeline-root/pipeline-runs
   _PIPELINE_SA_EMAIL_STAGING: my-agentic-rag-rag@staging-adk.iam.gserviceaccount.com
   _PIPELINE_NAME: data-ingestion-pipeline
-  _ARTIFACT_REGISTRY_REPO_NAME: my-agentic-rag-staging
+  _ARTIFACT_REGISTRY_REPO_NAME: my-agentic-rag-docker-repo
   _CONTAINER_NAME: my-agentic-rag
   _BUCKET_NAME_LOAD_TEST_RESULTS: staging-adk-my-agentic-rag-load-test-results
 
