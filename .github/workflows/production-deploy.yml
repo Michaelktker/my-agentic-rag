@@ -2,10 +2,6 @@
 name: Deploy to Production
 
 on:
-  workflow_run:
-    workflows: ["Deploy to Staging"]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       staging_build_id:
@@ -30,7 +26,7 @@ jobs:
   validate-staging:
     name: Validate Staging Success
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch'
     outputs:
       staging_url: ${{ steps.validate.outputs.staging_url }}
       image_url: ${{ steps.validate.outputs.image_url }}
@@ -39,9 +35,8 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
           project_id: ${{ env.STAGING_PROJECT_ID }}
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
@@ -112,9 +107,8 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_PROD }}
           project_id: ${{ env.PROD_PROJECT_ID }}
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER_PROD }}
-          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT_PROD }}
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
