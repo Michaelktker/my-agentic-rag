@@ -27,7 +27,6 @@ jobs:
   staging-deploy:
     name: Deploy to Staging Environment
     runs-on: ubuntu-latest
-    environment: staging
 
     permissions:
       contents: read

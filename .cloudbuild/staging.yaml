@@ -132,8 +132,17 @@ steps:
         echo "_________________________________________________________________________"
 
 substitutions:
-  _STAGING_PROJECT_ID: YOUR_STAGING_PROJECT_ID
+  _STAGING_PROJECT_ID: staging-adk
+  _PRODUCTION_PROJECT_ID: production-adk
   _REGION: us-central1
+  _DATA_STORE_REGION: global
+  _DATA_STORE_ID_STAGING: my-agentic-rag-datastore-staging
+  _PIPELINE_GCS_ROOT_STAGING: gs://staging-adk-my-agentic-rag-pipeline-root/pipeline-runs
+  _PIPELINE_SA_EMAIL_STAGING: my-agentic-rag-rag@staging-adk.iam.gserviceaccount.com
+  _PIPELINE_NAME: data-ingestion-pipeline
+  _ARTIFACT_REGISTRY_REPO_NAME: my-agentic-rag-staging
+  _CONTAINER_NAME: my-agentic-rag
+  _BUCKET_NAME_LOAD_TEST_RESULTS: staging-adk-my-agentic-rag-load-test-results
 
 logsBucket: gs://${PROJECT_ID}-my-agentic-rag-logs-data/build-logs
 options:
