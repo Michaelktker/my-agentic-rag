@@ -89,18 +89,20 @@ jobs:
               body: `🚀 **Staging Deployment Complete**\n\n✅ Status: ${{ steps.status.outputs.status }}\n🔗 Build: https://console.cloud.google.com/cloud-build/builds;region=${{ env.REGION }}?project=${{ env.STAGING_PROJECT_ID }}\n🌐 Staging URL: https://my-agentic-rag-454188184539.us-central1.run.app`
             })
 
-      - name: Create deployment status
+      - name: Deployment Summary
         if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const state = '${{ steps.status.outputs.status }}' === 'SUCCESS' ? 'success' : 'failure';
-            github.rest.repos.createDeploymentStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              deployment_id: context.payload.deployment?.id || 0,
-              state: state,
-              environment: 'staging',
-              environment_url: 'https://my-agentic-rag-454188184539.us-central1.run.app',
-              description: 'Staging deployment via Cloud Build'
-            });
+        run: |
+          echo "🎯 Staging Deployment Summary"
+          echo "=============================="
+          echo "Build Status: ${{ steps.status.outputs.status }}"
+          echo "Project: ${{ env.STAGING_PROJECT_ID }}"
+          echo "Region: ${{ env.REGION }}"
+          echo "Build ID: ${{ steps.build.outputs.build_id }}"
+          echo ""
+          if [ "${{ steps.status.outputs.status }}" = "SUCCESS" ]; then
+            echo "✅ Staging deployment completed successfully!"
+            echo "🌐 Staging URL: https://my-agentic-rag-454188184539.us-central1.run.app"
+          else
+            echo "❌ Staging deployment failed"
+          fi
+          echo "🔗 Build Details: https://console.cloud.google.com/cloud-build/builds;region=${{ env.REGION }}?project=${{ env.STAGING_PROJECT_ID }}"
