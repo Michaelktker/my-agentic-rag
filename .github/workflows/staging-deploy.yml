@@ -44,7 +44,7 @@ jobs:
         id: build
         run: |
           build_id=$(gcloud builds submit \
-            --config=.cloudbuild/staging.yaml \
+            --config=.cloudbuild/staging-simple.yaml \
             --project=${{ env.STAGING_PROJECT_ID }} \
             --region=${{ env.REGION }} \
             --substitutions=_PROJECT_ID=${{ env.STAGING_PROJECT_ID }} \

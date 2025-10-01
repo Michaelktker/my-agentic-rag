@@ -1,0 +1,59 @@
+# Simplified staging deployment for CI/CD testing
+# This focuses on the core container deployment without data ingestion pipeline
+
+steps:
+  # Build and Push Container
+  - name: "gcr.io/cloud-builders/docker"
+    id: build-container
+    args:
+      [
+        "build",
+        "-t",
+        "$_REGION-docker.pkg.dev/${_STAGING_PROJECT_ID}/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME",
+        "--build-arg",
+        "COMMIT_SHA=$COMMIT_SHA",
+        ".",
+      ]
+  
+  - name: "gcr.io/cloud-builders/docker"
+    id: push-container
+    args:
+      [
+        "push",
+        "$_REGION-docker.pkg.dev/${_STAGING_PROJECT_ID}/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME",
+      ]
+
+  # Deploy to Cloud Run
+  - name: "gcr.io/cloud-builders/gcloud"
+    id: deploy-to-cloud-run
+    entrypoint: /bin/bash
+    args:
+      - "-c"
+      - |
+        gcloud run deploy my-agentic-rag \
+          --image $_REGION-docker.pkg.dev/${_STAGING_PROJECT_ID}/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME \
+          --platform managed \
+          --region ${_REGION} \
+          --project ${_STAGING_PROJECT_ID} \
+          --memory 4Gi \
+          --no-allow-unauthenticated \
+          --no-cpu-throttling \
+          --set-env-vars COMMIT_SHA=$COMMIT_SHA,DATA_STORE_ID=my-agentic-rag-datastore,DATA_STORE_REGION=us \
+          --labels created-by=adk \
+          --format="value(status.url)" > staging_url.txt
+        
+        echo "_________________________________________________________________________"
+        echo "✅ Staging deployment successful!"
+        echo "🔗 Staging URL: $(cat staging_url.txt)"
+        echo "_________________________________________________________________________"
+
+substitutions:
+  _PROJECT_ID: staging-adk
+  _STAGING_PROJECT_ID: staging-adk
+  _REGION: us-central1
+  _ARTIFACT_REGISTRY_REPO_NAME: my-agentic-rag-docker-repo
+  _CONTAINER_NAME: my-agentic-rag
+
+logsBucket: gs://${_PROJECT_ID}-my-agentic-rag-logs-data/build-logs
+options:
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
