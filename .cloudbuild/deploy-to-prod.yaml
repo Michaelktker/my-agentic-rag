@@ -97,6 +97,8 @@ steps:
         
         echo "🌐 Production URL: $PROD_URL"
         
+        # URL available via ${_PROD_URL} substitution variable
+        
         # Wait for service to be ready
         sleep 30
         
@@ -104,8 +106,7 @@ steps:
         echo "ℹ️ Skipping health check for authenticated production service"
         echo "✅ Production service deployed successfully"
         
-        # Store URL for next steps
-        echo "$PROD_URL" > prod_url.txt
+        # URL stored via substitution variable
 
   # Run production smoke tests
   - name: "python:3.11-slim"
@@ -117,7 +118,7 @@ steps:
         echo "🧪 Running production smoke tests..."
         pip install requests==2.31.0 --user
         
-        export PROD_URL=$(cat prod_url.txt)
+        export PROD_URL="${_PROD_URL}"
         
         python3 << 'EOF'
         import requests
@@ -148,12 +149,11 @@ steps:
     args:
       - "-c"
       - |
-        export PROD_URL=$(cat prod_url.txt)
         echo "_________________________________________________________________________"
         echo "🎉 PRODUCTION DEPLOYMENT SUCCESSFUL!"
         echo ""
         echo "🌟 Environment: PRODUCTION"
-        echo "🌐 Production URL: $PROD_URL"
+        echo "🌐 Production URL: ${_PROD_URL}"
         echo "📊 Console: https://console.cloud.google.com/run/detail/${_REGION}/my-agentic-rag?project=${_PROD_PROJECT_ID}"
         echo "📈 Monitoring: https://console.cloud.google.com/monitoring/dashboards?project=${_PROD_PROJECT_ID}"
         echo "🗄️ Data Store: ${_DATA_STORE_ID_PROD}"
@@ -161,12 +161,13 @@ steps:
         echo "🔗 Quick Test:"
         echo "curl -X POST -H 'Content-Type: application/json' \\"
         echo "  -d '{\"appName\":\"my-agentic-rag\",\"userId\":\"test\",\"sessionId\":\"test\",\"newMessage\":{\"parts\":[{\"text\":\"Hello!\"}],\"role\":\"user\"}}' \\"
-        echo "  $PROD_URL/run"
+        echo "  ${_PROD_URL}/run"
         echo "_________________________________________________________________________"
 
 substitutions:
   _PROD_PROJECT_ID: production-adk
   _REGION: us-central1
+  _PROD_URL: "https://my-agentic-rag-638797485217.us-central1.run.app"
   
   # Data ingestion pipeline variables
   _PIPELINE_GCS_ROOT_PROD: gs://production-adk-my-agentic-rag-rag
