@@ -55,5 +55,6 @@ substitutions:
   _CONTAINER_NAME: my-agentic-rag
 
 logsBucket: gs://${_PROJECT_ID}-my-agentic-rag-logs-data/build-logs
+serviceAccount: projects/${_PROJECT_ID}/serviceAccounts/github-actions@${_PROJECT_ID}.iam.gserviceaccount.com
 options:
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
