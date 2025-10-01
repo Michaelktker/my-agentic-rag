@@ -56,9 +56,7 @@ jobs:
       - name: Wait for build completion
         run: |
           echo "⏳ Waiting for build completion..."
-          gcloud builds wait ${{ steps.build.outputs.build_id }} \
-            --project=${{ env.STAGING_PROJECT_ID }} \
-            --region=${{ env.REGION }}
+          gcloud builds log --region=us-central1 --stream "${{ steps.build.outputs.build_id }}"
 
       - name: Get build status
         id: status
