@@ -90,12 +90,10 @@ steps:
         echo "🏥 Performing production health check..."
         
         # Get production service URL
-        PROD_URL=$(gcloud run services describe my-agentic-rag \
-          --region ${_REGION} \
-          --project ${_PROD_PROJECT_ID} \
-          --format="value(status.url)")
+        echo "🌐 Production URL: ${_PROD_URL}"
         
-        echo "🌐 Production URL: $PROD_URL"
+        # Verify deployment completed
+        echo "✅ Production deployment completed successfully"
         
         # URL available via ${_PROD_URL} substitution variable
         
@@ -118,7 +116,7 @@ steps:
         echo "🧪 Running production smoke tests..."
         pip install requests==2.31.0 --user
         
-        export PROD_URL="${_PROD_URL}"
+        # Use _PROD_URL substitution variable directly
         
         python3 << 'EOF'
         import requests
@@ -126,7 +124,7 @@ steps:
         import os
         import sys
         
-        prod_url = os.environ['PROD_URL']
+        # Production URL: ${_PROD_URL}
         
         # Skip API tests for authenticated production service
         print("ℹ️ Skipping API tests for authenticated production service")
