@@ -22,6 +22,7 @@ steps:
         cd data_ingestion && pip install uv==0.6.12 --user && cd data_ingestion_pipeline && \
         uv sync --locked && uv run python submit_pipeline.py
     env:
+      - "PROJECT_ID=${_STAGING_PROJECT_ID}"
       - "PIPELINE_ROOT=${_PIPELINE_GCS_ROOT_STAGING}"
       - "REGION=${_REGION}"
       - "DATA_STORE_REGION=${_DATA_STORE_REGION}"
