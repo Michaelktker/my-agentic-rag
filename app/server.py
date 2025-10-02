@@ -82,7 +82,8 @@ def health_check() -> dict[str, str]:
     return {
         "status": "healthy", 
         "message": "CI/CD pipeline test successful!", 
-        "timestamp": datetime.datetime.now().isoformat()
+        "timestamp": datetime.datetime.now().isoformat(),
+        "version": "1.0.0"
     }
 
 
