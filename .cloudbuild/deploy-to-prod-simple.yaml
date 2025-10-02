@@ -29,7 +29,17 @@ steps:
       - "production-adk"
       - "--platform"
       - "managed"
-      - "--allow-unauthenticated"
+      - "--no-allow-unauthenticated"
+      - "--set-env-vars"
+      - "ENVIRONMENT=production,PROJECT_ID=production-adk,DATA_STORE_ID=my-agentic-rag-datastore"
+      - "--memory"
+      - "2Gi"
+      - "--cpu"
+      - "2"
+      - "--max-instances"
+      - "100"
+      - "--min-instances"
+      - "0"
 
   # Echo production deployment info
   - name: gcr.io/cloud-builders/gcloud
