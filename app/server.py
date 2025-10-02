@@ -76,9 +76,14 @@ def health_check() -> dict[str, str]:
     """Health check endpoint to test CI/CD pipeline.
 
     Returns:
-        Health status message
+        Health status message with timestamp
     """
-    return {"status": "healthy", "message": "CI/CD pipeline test successful!"}
+    import datetime
+    return {
+        "status": "healthy", 
+        "message": "CI/CD pipeline test successful!", 
+        "timestamp": datetime.datetime.now().isoformat()
+    }
 
 
 @app.post("/feedback")
