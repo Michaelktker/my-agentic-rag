@@ -81,12 +81,10 @@ def health_check() -> dict[str, str]:
     import datetime
     return {
         "status": "healthy", 
-        "message": "CI/CD pipeline test successful!", 
+        "message": "CI/CD pipeline test successful with updated permissions!", 
         "timestamp": datetime.datetime.now().isoformat(),
-        "version": "1.0.0"
+        "version": "v1.1"
     }
-
-
 @app.post("/feedback")
 def collect_feedback(feedback: Feedback) -> dict[str, str]:
     """Collect and log feedback.
