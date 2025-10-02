@@ -71,6 +71,16 @@ app.title = "my-agentic-rag"
 app.description = "API for interacting with the Agent my-agentic-rag"
 
 
+@app.get("/health")
+def health_check() -> dict[str, str]:
+    """Health check endpoint to test CI/CD pipeline.
+
+    Returns:
+        Health status message
+    """
+    return {"status": "healthy", "message": "CI/CD pipeline test successful!"}
+
+
 @app.post("/feedback")
 def collect_feedback(feedback: Feedback) -> dict[str, str]:
     """Collect and log feedback.
