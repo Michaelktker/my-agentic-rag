@@ -132,10 +132,7 @@ steps:
         
         # Note: Actual API testing would require authentication
         # Production service is secured and requires proper credentials
-                    "role": "user"
-                }
-            }
-            
+        
         EOF
     env:
       - 'PATH=/usr/local/bin:/usr/bin:~/.local/bin'
