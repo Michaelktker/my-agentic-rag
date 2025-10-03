@@ -18,7 +18,10 @@ import os
 import google
 import vertexai
 from google.adk.agents import Agent
+from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
+from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
 from langchain_google_vertexai import VertexAIEmbeddings
+from mcp import StdioServerParameters
 
 from app.retrievers import get_compressor, get_retriever
 from app.templates import format_docs
@@ -90,11 +93,39 @@ Answer to the best of your ability using the context provided.
 Leverage the Tools you are provided to answer questions.
 If you already know the answer to a question, you can respond directly without using the tools.
 
+You also have access to GitHub tools through MCP that allow you to:
+- Search repositories and files
+- Get repository information
+- Access issues and pull requests
+- And more GitHub operations
+
 Updated: Testing CI/CD pipeline - 2025-09-30"""
+
+# Get GitHub PAT from environment variable for MCP server
+github_pat = os.environ.get("GITHUB_PAT")
+
+github_mcp_toolset = McpToolset(
+    connection_params=StdioConnectionParams(
+        server_params=StdioServerParameters(
+            command="docker",
+            args=[
+                "run",
+                "-i", 
+                "--rm",
+                "-e", 
+                f"GITHUB_PERSONAL_ACCESS_TOKEN={github_pat}",  # Use correct env var name
+                "ghcr.io/github/github-mcp-server"
+            ]
+        ),
+        timeout=60,  # Increase timeout for Docker operations
+    )
+)
+
+tools = [github_mcp_toolset, retrieve_docs]
 
 root_agent = Agent(
     name="root_agent",
     model="gemini-2.0-flash",
     instruction=instruction,
-    tools=[retrieve_docs],
+    tools=tools,
 )

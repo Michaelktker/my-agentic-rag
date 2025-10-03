@@ -49,6 +49,33 @@ data "google_secret_manager_secret" "github_pat" {
   secret_id = var.github_pat_secret_id
 }
 
+# Create GitHub PAT secret for MCP integration
+resource "google_secret_manager_secret" "github_pat_mcp" {
+  for_each = local.deploy_project_ids
+  
+  project   = each.value
+  secret_id = "github-pat-mcp"
+  
+  replication {
+    auto {}
+  }
+  
+  labels = {
+    created-by = "adk"
+    purpose    = "github-mcp-integration"
+  }
+  
+  depends_on = [google_project_service.deploy_project_services]
+}
+
+# Create GitHub PAT secret version for MCP integration
+resource "google_secret_manager_secret_version" "github_pat_mcp" {
+  for_each = local.deploy_project_ids
+  
+  secret      = google_secret_manager_secret.github_pat_mcp[each.key].id
+  secret_data = var.github_pat_token
+}
+
 # Create the GitHub connection (fallback for manual Terraform usage)
 resource "google_cloudbuildv2_connection" "github_connection" {
   count      = var.create_cb_connection ? 0 : 1

@@ -151,6 +151,13 @@ variable "github_pat_secret_id" {
   default     = null
 }
 
+variable "github_pat_token" {
+  description = "GitHub Personal Access Token for MCP server integration"
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
 variable "create_cb_connection" {
   description = "Flag indicating if a Cloud Build connection already exists"
   type        = bool

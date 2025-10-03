@@ -104,3 +104,18 @@ resource "google_project_iam_member" "vertexai_pipeline_sa_roles" {
   member     = "serviceAccount:${google_service_account.vertexai_pipeline_app_sa[split(",", each.key)[0]].email}"
   depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.deploy_project_services]
 }
+
+# Grant Cloud Run service accounts access to GitHub PAT secret for MCP integration
+resource "google_secret_manager_secret_iam_member" "github_pat_mcp_access" {
+  for_each = local.deploy_project_ids
+  
+  project   = each.value
+  secret_id = google_secret_manager_secret.github_pat_mcp[each.key].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.app_sa[each.key].email}"
+  
+  depends_on = [
+    google_secret_manager_secret.github_pat_mcp,
+    google_service_account.app_sa
+  ]
+}

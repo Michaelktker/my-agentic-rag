@@ -51,6 +51,7 @@ make install && make playground
 | `make lint`          | Run code quality checks (codespell, ruff, mypy)                                             |
 | `make setup-dev-env` | Set up development environment resources using Terraform                         |
 | `make data-ingestion`| Run data ingestion pipeline in the Dev environment                                           |
+| `./setup-mcp.sh`    | Set up GitHub MCP server for enhanced GitHub integration                                     |
 | `uv run jupyter lab` | Launch Jupyter notebook                                                                     |
 
 For full command options and usage, refer to the [Makefile](Makefile).

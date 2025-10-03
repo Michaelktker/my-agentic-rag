@@ -51,6 +51,16 @@ resource "google_cloud_run_v2_service" "app_staging" {
         name  = "DATA_STORE_REGION"
         value = var.data_store_region
       }
+
+      env {
+        name = "GITHUB_PAT"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.github_pat_mcp["staging"].secret_id
+            version = "latest"
+          }
+        }
+      }
     }
 
     service_account                = google_service_account.app_sa["staging"].email
@@ -112,6 +122,16 @@ resource "google_cloud_run_v2_service" "app_prod" {
       env {
         name  = "DATA_STORE_REGION"
         value = var.data_store_region
+      }
+
+      env {
+        name = "GITHUB_PAT"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.github_pat_mcp["prod"].secret_id
+            version = "latest"
+          }
+        }
       }
     }
 
