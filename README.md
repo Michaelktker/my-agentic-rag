@@ -6,6 +6,7 @@ Agent generated with [`googleCloudPlatform/agent-starter-pack`](https://github.c
 **Last deployment test**: October 3, 2025 08:10 UTC
 **Webhook test**: Testing PR webhook integration - October 3, 2025
 **Staging deployment test**: Testing staging webhook trigger - October 3, 2025 13:25 UTC
+**Cloud Build only test**: Testing exclusive Cloud Build triggers - October 3, 2025 13:40 UTC
 
 ## Project Structure
 
