@@ -13,6 +13,7 @@
 # limitations under the License.
 
 # mypy: disable-error-code="arg-type"
+# Full deployment test - October 3, 2025 - Testing complete CI/CD pipeline
 import os
 
 import google

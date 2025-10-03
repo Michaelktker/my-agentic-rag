@@ -101,6 +101,7 @@ def collect_feedback(feedback: Feedback) -> dict[str, str]:
 
 
 # Main execution
+# Deployment Test: Full CI/CD pipeline test - October 3, 2025 13:45 UTC
 if __name__ == "__main__":
     import uvicorn
 
