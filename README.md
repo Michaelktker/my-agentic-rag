@@ -4,6 +4,7 @@ ADK RAG agent for document retrieval and Q&A. Includes a data pipeline for inges
 Agent generated with [`googleCloudPlatform/agent-starter-pack`](https://github.com/GoogleCloudPlatform/agent-starter-pack) version `0.15.2`
 
 **Last deployment test**: October 3, 2025 08:10 UTC
+**Webhook test**: Testing PR webhook integration - October 3, 2025
 
 ## Project Structure
 
