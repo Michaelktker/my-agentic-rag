@@ -120,25 +120,27 @@ def get_github_token():
         return None
 
 github_token = get_github_token()
-if github_token:
-    mcp_tools = MCPToolset(
-        connection_params=StreamableHTTPConnectionParams(
-            url="https://api.githubcopilot.com/mcp/",
-            headers={
-                "Authorization": f"Bearer {github_token}",
-            },
-        ),
-        # Read only tools
-        tool_filter=[
-            "search_repositories",
-            "search_issues",
-            "list_issues",
-            "get_issue",
-            "list_pull_requests",
-            "get_pull_request",
-        ],
-    )
-    tools = [mcp_tools, retrieve_docs]
+if not github_token:
+    raise RuntimeError("GitHub token is required but not available from environment or Secret Manager")
+
+mcp_tools = MCPToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url="https://api.githubcopilot.com/mcp/",
+        headers={
+            "Authorization": f"Bearer {github_token}",
+        },
+    ),
+    # Read only tools
+    tool_filter=[
+        "search_repositories",
+        "search_issues",
+        "list_issues",
+        "get_issue",
+        "list_pull_requests",
+        "get_pull_request",
+    ],
+)
+tools = [mcp_tools, retrieve_docs]
 
 root_agent = Agent(
     name="root_agent",
