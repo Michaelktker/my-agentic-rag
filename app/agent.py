@@ -106,7 +106,7 @@ def get_github_token():
     # First try environment variable (for local development)
     token = os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
     if token:
-        return token
+        return token.strip()
     
     # Fallback to Secret Manager (for production)
     try:
@@ -114,7 +114,7 @@ def get_github_token():
         client = secretmanager.SecretManagerServiceClient()
         name = f"projects/{project_id}/secrets/github-personal-access-token/versions/latest"
         response = client.access_secret_version(request={"name": name})
-        return response.payload.data.decode("UTF-8")
+        return response.payload.data.decode("UTF-8").strip()
     except Exception as e:
         print(f"Warning: Could not retrieve GitHub token from Secret Manager: {e}")
         return None
