@@ -100,25 +100,48 @@ You also have access to GitHub tools through MCP that allow you to:
 
 Updated: Testing CI/CD pipeline - 2025-09-30"""
 
-mcp_tools = MCPToolset(
-    connection_params=StreamableHTTPConnectionParams(
-        url="https://api.githubcopilot.com/mcp/",
-        headers={
-            "Authorization": "Bearer " + (os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN") or ""),
-        },
-    ),
-    # Read only tools
-    tool_filter=[
-        "search_repositories",
-        "search_issues",
-        "list_issues",
-        "get_issue",
-        "list_pull_requests",
-        "get_pull_request",
-    ],
-)
+# Initialize MCP tools only if GitHub token is available
+def get_github_token():
+    """Get GitHub token from environment or Secret Manager"""
+    # First try environment variable (for local development)
+    token = os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
+    if token:
+        return token
+    
+    # Fallback to Secret Manager (for production)
+    try:
+        from google.cloud import secretmanager
+        client = secretmanager.SecretManagerServiceClient()
+        name = f"projects/{project_id}/secrets/github-personal-access-token/versions/latest"
+        response = client.access_secret_version(request={"name": name})
+        return response.payload.data.decode("UTF-8")
+    except Exception as e:
+        print(f"Warning: Could not retrieve GitHub token from Secret Manager: {e}")
+        return None
 
-tools = [mcp_tools, retrieve_docs]
+github_token = get_github_token()
+if github_token:
+    mcp_tools = MCPToolset(
+        connection_params=StreamableHTTPConnectionParams(
+            url="https://api.githubcopilot.com/mcp/",
+            headers={
+                "Authorization": f"Bearer {github_token}",
+            },
+        ),
+        # Read only tools
+        tool_filter=[
+            "search_repositories",
+            "search_issues",
+            "list_issues",
+            "get_issue",
+            "list_pull_requests",
+            "get_pull_request",
+        ],
+    )
+    tools = [mcp_tools, retrieve_docs]
+else:
+    # Fall back to just retrieval tools if no GitHub token
+    tools = [retrieve_docs]
 
 root_agent = Agent(
     name="root_agent",
