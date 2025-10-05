@@ -139,9 +139,6 @@ if github_token:
         ],
     )
     tools = [mcp_tools, retrieve_docs]
-else:
-    # Fall back to just retrieval tools if no GitHub token
-    tools = [retrieve_docs]
 
 root_agent = Agent(
     name="root_agent",
