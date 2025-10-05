@@ -19,10 +19,8 @@ import os
 import google
 import vertexai
 from google.adk.agents import Agent
-from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
-from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
+from google.adk.tools.mcp_tool import MCPToolset, StreamableHTTPConnectionParams
 from langchain_google_vertexai import VertexAIEmbeddings
-from mcp import StdioServerParameters
 
 from app.retrievers import get_compressor, get_retriever
 from app.templates import format_docs
@@ -102,27 +100,25 @@ You also have access to GitHub tools through MCP that allow you to:
 
 Updated: Testing CI/CD pipeline - 2025-09-30"""
 
-# Get GitHub PAT from environment variable for MCP server
-github_pat = os.environ.get("GITHUB_PAT")
-
-github_mcp_toolset = McpToolset(
-    connection_params=StdioConnectionParams(
-        server_params=StdioServerParameters(
-            command="docker",
-            args=[
-                "run",
-                "-i", 
-                "--rm",
-                "-e", 
-                f"GITHUB_PERSONAL_ACCESS_TOKEN={github_pat}",  # Use correct env var name
-                "ghcr.io/github/github-mcp-server"
-            ]
-        ),
-        timeout=60,  # Increase timeout for Docker operations
-    )
+mcp_tools = MCPToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url="https://api.githubcopilot.com/mcp/",
+        headers={
+            "Authorization": "Bearer " + (os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN") or ""),
+        },
+    ),
+    # Read only tools
+    tool_filter=[
+        "search_repositories",
+        "search_issues",
+        "list_issues",
+        "get_issue",
+        "list_pull_requests",
+        "get_pull_request",
+    ],
 )
 
-tools = [github_mcp_toolset, retrieve_docs]
+tools = [mcp_tools, retrieve_docs]
 
 root_agent = Agent(
     name="root_agent",

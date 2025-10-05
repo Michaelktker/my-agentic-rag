@@ -26,7 +26,7 @@ backend:
 		--no-cpu-throttling \
 		--labels "created-by=adk" \
 		--set-env-vars \
-		"COMMIT_SHA=$(shell git rev-parse HEAD),DATA_STORE_ID=my-agentic-rag-datastore,DATA_STORE_REGION=us" \
+		"COMMIT_SHA=$(shell git rev-parse HEAD),DATA_STORE_ID=my-agentic-rag-datastore,DATA_STORE_REGION=us,GITHUB_PERSONAL_ACCESS_TOKEN=$$GITHUB_PERSONAL_ACCESS_TOKEN" \
 		$(if $(IAP),--iap) \
 		$(if $(PORT),--port=$(PORT))
 
