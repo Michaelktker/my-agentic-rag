@@ -218,6 +218,30 @@ gcloud run services update-traffic my-agentic-rag \
   --to-latest --region=us-central1
 ```
 
+### CI/CD Service Account Permissions
+
+**Important**: The CI/CD service accounts need access to the GitHub token secret for PR checks and integration tests to pass:
+
+```bash
+# Grant production CI service account access to GitHub token
+gcloud secrets add-iam-policy-binding github-personal-access-token \
+  --project=production-adk \
+  --member="serviceAccount:my-agentic-rag-cb@production-adk.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+
+# Grant staging GitHub Actions service account access to GitHub token  
+gcloud secrets add-iam-policy-binding github-personal-access-token \
+  --project=staging-adk \
+  --member="serviceAccount:github-actions@staging-adk.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+```
+
+**Required Service Account Roles for CI/CD:**
+- `secretmanager.secretAccessor`: Access to GitHub tokens
+- `cloudbuild.builds.builder`: Execute build steps
+- `aiplatform.user`: Access Vertex AI services for testing
+- `logging.logWriter`: Write build logs
+
 ## 📊 Monitoring & Troubleshooting
 
 ### Health Monitoring
@@ -240,6 +264,11 @@ gcloud builds list --project=production-adk --limit=10
 - Check build logs: `gcloud builds log BUILD_ID`
 - Verify IAM permissions
 - Ensure secrets exist and are accessible
+
+#### PR Check Failures
+- **Common Issue**: CI service account lacks access to GitHub token secret
+- **Solution**: Grant `secretmanager.secretAccessor` role to CI service accounts
+- **Verification**: Check integration tests can access MCP GitHub tools
 
 #### Service Errors
 - Check Cloud Run logs for application errors
