@@ -107,6 +107,7 @@ When using GitHub tools, use this repository unless the user specifies a differe
 
 Updated: Testing CI/CD pipeline - 2025-09-30"""
 
+
 # Initialize MCP tools only if GitHub token is available
 def get_github_token():
     """Get GitHub token from environment or Secret Manager"""
@@ -114,10 +115,11 @@ def get_github_token():
     token = os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
     if token:
         return token.strip()
-    
+
     # Fallback to Secret Manager (for production)
     try:
         from google.cloud import secretmanager
+
         client = secretmanager.SecretManagerServiceClient()
         name = f"projects/{project_id}/secrets/github-personal-access-token/versions/latest"
         response = client.access_secret_version(request={"name": name})
@@ -126,9 +128,12 @@ def get_github_token():
         print(f"Warning: Could not retrieve GitHub token from Secret Manager: {e}")
         return None
 
+
 github_token = get_github_token()
 if not github_token:
-    raise RuntimeError("GitHub token is required but not available from environment or Secret Manager")
+    raise RuntimeError(
+        "GitHub token is required but not available from environment or Secret Manager"
+    )
 
 mcp_tools = MCPToolset(
     connection_params=StreamableHTTPConnectionParams(

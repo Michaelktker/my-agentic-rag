@@ -14,4 +14,4 @@
 
 from .agent import GITHUB_OWNER, GITHUB_REPO, root_agent
 
-__all__ = ["root_agent", "GITHUB_OWNER", "GITHUB_REPO"]
+__all__ = ["GITHUB_OWNER", "GITHUB_REPO", "root_agent"]
