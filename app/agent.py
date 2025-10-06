@@ -30,6 +30,10 @@ LLM_LOCATION = "global"
 LOCATION = "us-central1"
 LLM = "gemini-2.5-flash"
 
+# GitHub repository constants
+GITHUB_OWNER = "Michaelktker"
+GITHUB_REPO = "my-agentic-rag"
+
 credentials, project_id = google.auth.default()
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", project_id)
 os.environ.setdefault("GOOGLE_CLOUD_LOCATION", LLM_LOCATION)
@@ -87,7 +91,7 @@ def retrieve_docs(query: str) -> str:
     return formatted_docs
 
 
-instruction = """You are an AI assistant for question-answering tasks.
+instruction = f"""You are an AI assistant for question-answering tasks.
 Answer to the best of your ability using the context provided.
 Leverage the Tools you are provided to answer questions.
 If you already know the answer to a question, you can respond directly without using the tools.
@@ -97,6 +101,9 @@ You also have access to GitHub tools through MCP that allow you to:
 - Get repository information
 - Access issues and pull requests
 - And more GitHub operations
+
+By default, you are working with the GitHub repository: {GITHUB_OWNER}/{GITHUB_REPO}
+When using GitHub tools, use this repository unless the user specifies a different one.
 
 Updated: Testing CI/CD pipeline - 2025-09-30"""
 
