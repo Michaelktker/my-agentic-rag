@@ -130,15 +130,6 @@ mcp_tools = MCPToolset(
             "Authorization": f"Bearer {github_token}",
         },
     ),
-    # Read only tools
-    tool_filter=[
-        "search_repositories",
-        "search_issues",
-        "list_issues",
-        "get_issue",
-        "list_pull_requests",
-        "get_pull_request",
-    ],
 )
 tools = [mcp_tools, retrieve_docs]
 
