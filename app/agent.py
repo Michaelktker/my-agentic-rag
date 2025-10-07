@@ -111,17 +111,17 @@ Updated: Testing CI/CD pipeline - 2025-09-30"""
 # Initialize MCP tools only if GitHub token is available
 def get_github_token():
     """Get GitHub token from environment or Secret Manager"""
-    # First try environment variable (for local development)
-    token = os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
+    # First try environment variable (matches Terraform GITHUB_PAT)
+    token = os.getenv("GITHUB_PAT")
     if token:
         return token.strip()
 
-    # Fallback to Secret Manager (for production)
+    # Fallback to Secret Manager (matches Terraform github-pat-mcp secret)
     try:
         from google.cloud import secretmanager
 
         client = secretmanager.SecretManagerServiceClient()
-        name = f"projects/{project_id}/secrets/github-personal-access-token/versions/latest"
+        name = f"projects/{project_id}/secrets/github-pat-mcp/versions/latest"
         response = client.access_secret_version(request={"name": name})
         return response.payload.data.decode("UTF-8").strip()
     except Exception as e:
