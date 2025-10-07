@@ -162,3 +162,12 @@ resource "google_cloud_run_v2_service" "app_prod" {
   # Make dependencies conditional to avoid errors.
   depends_on = [google_project_service.deploy_project_services]
 }
+
+# Make production service publicly accessible
+resource "google_cloud_run_service_iam_member" "app_prod_public_access" {
+  location = google_cloud_run_v2_service.app_prod.location
+  project  = google_cloud_run_v2_service.app_prod.project
+  service  = google_cloud_run_v2_service.app_prod.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
