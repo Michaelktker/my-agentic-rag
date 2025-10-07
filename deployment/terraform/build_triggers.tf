@@ -99,12 +99,12 @@ resource "google_cloudbuild_trigger" "cd_pipeline" {
 
 }
 
-# c. Create Deploy to production trigger
+# c. Create Deploy to production trigger (manual with approval)
 resource "google_cloudbuild_trigger" "deploy_to_prod_pipeline" {
   name            = "deploy-${var.project_name}"
   project         = var.cicd_runner_project_id
   location        = var.region
-  description     = "Trigger for deployment to production"
+  description     = "Trigger for deployment to production (manual with approval)"
   service_account = resource.google_service_account.cicd_runner_sa.id
   repository_event_config {
     repository = "projects/${var.cicd_runner_project_id}/locations/${var.region}/connections/${var.host_connection_name}/repositories/${var.repository_name}"
@@ -139,4 +139,59 @@ resource "google_cloudbuild_trigger" "deploy_to_prod_pipeline" {
     google_cloudbuildv2_repository.repo
   ]
 
+}
+
+# d. Create automatic production deployment trigger (triggers after successful staging)
+resource "google_cloudbuild_trigger" "auto_deploy_to_prod" {
+  name            = "auto-deploy-${var.project_name}"
+  project         = var.cicd_runner_project_id
+  location        = var.region
+  description     = "Automatic trigger for deployment to production after successful staging build"
+  service_account = resource.google_service_account.cicd_runner_sa.id
+  
+  # This trigger fires on successful completion of the staging CD pipeline
+  pubsub_config {
+    topic = "projects/${var.cicd_runner_project_id}/topics/cloud-builds"
+  }
+  
+  # Use a filter to only trigger on successful staging builds
+  filter = "_TRIGGER_NAME.matches(\"cd-${var.project_name}\") && BUILD_STATUS.matches(\"SUCCESS\")"
+  
+  filename = ".cloudbuild/deploy-to-prod.yaml"
+  include_build_logs = "INCLUDE_BUILD_LOGS_WITH_STATUS"
+  
+  # No approval required for automatic deployment
+  # approval_config {
+  #   approval_required = false
+  # }
+  
+  substitutions = {
+    _PROD_PROJECT_ID             = var.prod_project_id
+    _REGION                      = var.region
+
+    _CONTAINER_NAME              = var.project_name
+    _ARTIFACT_REGISTRY_REPO_NAME = resource.google_artifact_registry_repository.repo-artifacts-genai.repository_id
+
+    _PIPELINE_GCS_ROOT_PROD        = "gs://${resource.google_storage_bucket.data_ingestion_pipeline_gcs_root["prod"].name}"
+    _PIPELINE_SA_EMAIL_PROD             = resource.google_service_account.vertexai_pipeline_app_sa["prod"].email
+    _PIPELINE_CRON_SCHEDULE        = var.pipeline_cron_schedule
+
+    _DATA_STORE_ID_PROD            = resource.google_discovery_engine_data_store.data_store_prod.data_store_id
+    _DATA_STORE_REGION             = var.data_store_region
+
+    # Additional substitutions
+  }
+  depends_on = [
+    resource.google_project_service.cicd_services, 
+    resource.google_project_service.deploy_project_services, 
+    google_cloudbuildv2_connection.github_connection, 
+    google_cloudbuildv2_repository.repo,
+    google_pubsub_topic.cloud_builds
+  ]
+}
+
+# Create Pub/Sub topic for Cloud Build events
+resource "google_pubsub_topic" "cloud_builds" {
+  name    = "cloud-builds"
+  project = var.cicd_runner_project_id
 }
