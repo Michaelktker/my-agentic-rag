@@ -30,6 +30,10 @@ LLM_LOCATION = "global"
 LOCATION = "us-central1"
 LLM = "gemini-2.5-flash"
 
+# GitHub repository constants
+GITHUB_OWNER = "Michaelktker"
+GITHUB_REPO = "my-agentic-rag"
+
 credentials, project_id = google.auth.default()
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", project_id)
 os.environ.setdefault("GOOGLE_CLOUD_LOCATION", LLM_LOCATION)
@@ -87,7 +91,7 @@ def retrieve_docs(query: str) -> str:
     return formatted_docs
 
 
-instruction = """You are an AI assistant for question-answering tasks.
+instruction = f"""You are an AI assistant for question-answering tasks.
 Answer to the best of your ability using the context provided.
 Leverage the Tools you are provided to answer questions.
 If you already know the answer to a question, you can respond directly without using the tools.
@@ -98,7 +102,11 @@ You also have access to GitHub tools through MCP that allow you to:
 - Access issues and pull requests
 - And more GitHub operations
 
+By default, you are working with the GitHub repository: {GITHUB_OWNER}/{GITHUB_REPO}
+When using GitHub tools, use this repository unless the user specifies a different one.
+
 Updated: Testing CI/CD pipeline - 2025-09-30"""
+
 
 # Initialize MCP tools only if GitHub token is available
 def get_github_token():
@@ -107,10 +115,11 @@ def get_github_token():
     token = os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
     if token:
         return token.strip()
-    
+
     # Fallback to Secret Manager (for production)
     try:
         from google.cloud import secretmanager
+
         client = secretmanager.SecretManagerServiceClient()
         name = f"projects/{project_id}/secrets/github-personal-access-token/versions/latest"
         response = client.access_secret_version(request={"name": name})
@@ -119,9 +128,12 @@ def get_github_token():
         print(f"Warning: Could not retrieve GitHub token from Secret Manager: {e}")
         return None
 
+
 github_token = get_github_token()
 if not github_token:
-    raise RuntimeError("GitHub token is required but not available from environment or Secret Manager")
+    raise RuntimeError(
+        "GitHub token is required but not available from environment or Secret Manager"
+    )
 
 mcp_tools = MCPToolset(
     connection_params=StreamableHTTPConnectionParams(
