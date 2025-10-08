@@ -20,6 +20,8 @@ import google
 import vertexai
 from google.adk.agents import Agent
 from google.adk.tools.mcp_tool import MCPToolset, StreamableHTTPConnectionParams
+from google.adk.tools import google_search
+from google.adk.tools.agent_tool import AgentTool
 from langchain_google_vertexai import VertexAIEmbeddings
 
 from app.retrievers import get_compressor, get_retriever
@@ -91,10 +93,34 @@ def retrieve_docs(query: str) -> str:
     return formatted_docs
 
 
+# Web search agent prompt
+WEBSEARCH_PROMPT = """You are a specialized web search agent focused on finding accurate, up-to-date information from the internet.
+
+Your role is to:
+1. Perform comprehensive web searches using the provided search tools
+2. Analyze search results for relevance and credibility
+3. Synthesize information from multiple sources
+4. Provide clear, well-sourced answers with proper attribution
+5. Focus on recent, authoritative sources when possible
+
+When searching:
+- Use specific, targeted search queries
+- Look for authoritative sources (academic papers, official documentation, reputable news sources)
+- Cross-reference information across multiple sources
+- Clearly cite your sources in your responses
+- If information is conflicting or uncertain, acknowledge this
+
+Always be transparent about the sources of your information and the recency of the data."""
+
 instruction = f"""You are an AI assistant for question-answering tasks.
 Answer to the best of your ability using the context provided.
 Leverage the Tools you are provided to answer questions.
 If you already know the answer to a question, you can respond directly without using the tools.
+
+You have access to several specialized tools:
+1. Document retrieval from your knowledge base
+2. GitHub tools through MCP for repository operations
+3. Web search capabilities through a specialized web search agent
 
 You also have access to GitHub tools through MCP that allow you to:
 - Search repositories and files
@@ -104,6 +130,8 @@ You also have access to GitHub tools through MCP that allow you to:
 
 By default, you are working with the GitHub repository: {GITHUB_OWNER}/{GITHUB_REPO}
 When using GitHub tools, use this repository unless the user specifies a different one.
+
+Use the web search agent when you need current information, recent updates, or information not available in your knowledge base.
 
 Updated: Testing CI/CD pipeline - 2025-09-30"""
 
@@ -143,11 +171,23 @@ mcp_tools = MCPToolset(
         },
     ),
 )
-tools = [mcp_tools, retrieve_docs]
+
+# Create the web search agent
+websearch_agent = Agent(
+    model="gemini-2.5-flash",
+    name="academic_websearch_agent",
+    instruction=WEBSEARCH_PROMPT,
+    tools=[google_search],
+)
+
+# Create AgentTool from the web search agent
+websearch_tool = AgentTool(agent=websearch_agent)
+
+tools = [mcp_tools, retrieve_docs, websearch_tool]
 
 root_agent = Agent(
     name="root_agent",
-    model="gemini-2.0-flash",
+    model="gemini-2.5-flash",
     instruction=instruction,
     tools=tools,
 )
