@@ -21,9 +21,8 @@ steps:
       - "-c"
       - |
         echo "🔍 Validating staging image for commit ${COMMIT_SHA}..."
-        STAGING_IMAGE="${_REGION}-docker.pkg.dev/staging-adk/my-agentic-rag-repo/my-agentic-rag:${COMMIT_SHA}"
-        echo "Looking for image: $STAGING_IMAGE"
-        if gcloud container images describe $STAGING_IMAGE; then
+        echo "Looking for image: ${_REGION}-docker.pkg.dev/staging-adk/my-agentic-rag-repo/my-agentic-rag:${COMMIT_SHA}"
+        if gcloud container images describe ${_REGION}-docker.pkg.dev/staging-adk/my-agentic-rag-repo/my-agentic-rag:${COMMIT_SHA}; then
           echo "✅ Staging image verified for commit ${COMMIT_SHA}"
         else
           echo "❌ Staging image not found for commit ${COMMIT_SHA}"
