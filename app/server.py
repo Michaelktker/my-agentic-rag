@@ -82,9 +82,9 @@ def health_check() -> dict[str, str]:
     import datetime
     return {
         "status": "healthy", 
-        "message": "CI/CD pipeline test successful with updated permissions!", 
+        "message": "CI/CD pipeline test - Secret Manager permissions fixed!", 
         "timestamp": datetime.datetime.now().isoformat(),
-        "version": "v1.1"
+        "version": "v1.2"
     }
 
 @app.get("/version")
