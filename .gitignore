@@ -199,3 +199,4 @@ my_env.tfvars
 # Google Cloud SDK
 google-cloud-sdk/
 google-cloud-cli-linux-x86_64.tar.gz
+google-cloud-cli-458.0.1-linux-x86_64.tar.gz

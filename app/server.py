@@ -97,11 +97,12 @@ def version_info() -> dict[str, str]:
     import datetime
     commit_sha = os.environ.get("COMMIT_SHA", "unknown")
     return {
-        "version": "v1.2",
+        "version": "v1.3",
         "commit_sha": commit_sha,
         "deployment_time": datetime.datetime.now().isoformat(),
-        "message": "Commit-based Docker tagging system active",
-        "environment": os.environ.get("ENV", "unknown")
+        "message": "End-to-end CI/CD pipeline test with commit-based tagging",
+        "environment": os.environ.get("ENV", "unknown"),
+        "pipeline_test": "active"
     }
 
 @app.post("/feedback")

@@ -72,8 +72,14 @@ resource "google_project_iam_member" "cicd_run_invoker_artifact_registry_reader"
 
 }
 
-
-
+# 5. Allow production Cloud Run service agent to pull images from staging Artifact Registry
+resource "google_project_iam_member" "prod_cloudrun_staging_registry_reader" {
+  project = var.staging_project_id
+  role    = "roles/artifactregistry.reader"
+  member  = "serviceAccount:service-${data.google_project.projects["prod"].number}@serverless-robot-prod.iam.gserviceaccount.com"
+  
+  depends_on = [resource.google_project_service.deploy_project_services]
+}
 
 # Special assignment: Allow the CICD SA to create tokens
 resource "google_service_account_iam_member" "cicd_run_invoker_token_creator" {
