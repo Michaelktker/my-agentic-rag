@@ -86,6 +86,24 @@ def health_check() -> dict[str, str]:
         "timestamp": datetime.datetime.now().isoformat(),
         "version": "v1.1"
     }
+
+@app.get("/version")
+def version_info() -> dict[str, str]:
+    """Version and deployment info endpoint.
+    
+    Returns:
+        Version information including commit SHA from deployment
+    """
+    import datetime
+    commit_sha = os.environ.get("COMMIT_SHA", "unknown")
+    return {
+        "version": "v1.2",
+        "commit_sha": commit_sha,
+        "deployment_time": datetime.datetime.now().isoformat(),
+        "message": "Commit-based Docker tagging system active",
+        "environment": os.environ.get("ENV", "unknown")
+    }
+
 @app.post("/feedback")
 def collect_feedback(feedback: Feedback) -> dict[str, str]:
     """Collect and log feedback.
