@@ -21,7 +21,9 @@ steps:
       - "-c"
       - |
         echo "🔍 Validating staging image for commit ${COMMIT_SHA}..."
-        if gcloud container images describe us-central1-docker.pkg.dev/staging-adk/my-agentic-rag-docker-repo/my-agentic-rag:${COMMIT_SHA}; then
+        STAGING_IMAGE="${_REGION}-docker.pkg.dev/staging-adk/my-agentic-rag-repo/my-agentic-rag:${COMMIT_SHA}"
+        echo "Looking for image: $STAGING_IMAGE"
+        if gcloud container images describe $STAGING_IMAGE; then
           echo "✅ Staging image verified for commit ${COMMIT_SHA}"
         else
           echo "❌ Staging image not found for commit ${COMMIT_SHA}"
@@ -59,7 +61,7 @@ steps:
       - "deploy"
       - "my-agentic-rag"
       - "--image"
-      - "us-central1-docker.pkg.dev/staging-adk/my-agentic-rag-docker-repo/my-agentic-rag:${COMMIT_SHA}"
+      - "${_REGION}-docker.pkg.dev/staging-adk/my-agentic-rag-repo/my-agentic-rag:${COMMIT_SHA}"
       - "--region"
       - "${_REGION}"
       - "--project" 
@@ -134,7 +136,7 @@ steps:
         echo ""
         echo "🌟 Environment: PRODUCTION"
         echo "🔗 Commit SHA: ${COMMIT_SHA}"
-        echo "🐳 Image: us-central1-docker.pkg.dev/staging-adk/my-agentic-rag-docker-repo/my-agentic-rag:${COMMIT_SHA}"
+        echo "🐳 Image: ${_REGION}-docker.pkg.dev/staging-adk/my-agentic-rag-repo/my-agentic-rag:${COMMIT_SHA}"
         echo "🌐 Production URL: ${_PROD_URL}"
         echo "📊 Console: https://console.cloud.google.com/run/detail/${_REGION}/my-agentic-rag?project=${_PROD_PROJECT_ID}"
         echo "📈 Monitoring: https://console.cloud.google.com/monitoring/dashboards?project=${_PROD_PROJECT_ID}"
