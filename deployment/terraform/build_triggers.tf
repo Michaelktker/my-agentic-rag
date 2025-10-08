@@ -121,7 +121,6 @@ resource "google_cloudbuild_trigger" "deploy_to_prod_pipeline" {
     _CONTAINER_NAME              = var.project_name
     _ARTIFACT_REGISTRY_REPO_NAME = resource.google_artifact_registry_repository.repo-artifacts-genai.repository_id
 
-
     _PIPELINE_GCS_ROOT_PROD        = "gs://${resource.google_storage_bucket.data_ingestion_pipeline_gcs_root["prod"].name}"
     _PIPELINE_SA_EMAIL_PROD             = resource.google_service_account.vertexai_pipeline_app_sa["prod"].email
     _PIPELINE_CRON_SCHEDULE        = var.pipeline_cron_schedule
@@ -129,8 +128,9 @@ resource "google_cloudbuild_trigger" "deploy_to_prod_pipeline" {
     _DATA_STORE_ID_PROD            = resource.google_discovery_engine_data_store.data_store_prod.data_store_id
     _DATA_STORE_REGION             = var.data_store_region
 
-
-    # Your other Deploy to Prod Pipeline substitutions
+    # Legacy variables for compatibility
+    _ARTIFACT_REGISTRY_REPO_NAME   = resource.google_artifact_registry_repository.repo-artifacts-genai.repository_id
+    _CONTAINER_NAME                = var.project_name
   }
   depends_on = [
     resource.google_project_service.cicd_services, 
@@ -179,7 +179,9 @@ resource "google_cloudbuild_trigger" "auto_deploy_to_prod" {
     _DATA_STORE_ID_PROD            = resource.google_discovery_engine_data_store.data_store_prod.data_store_id
     _DATA_STORE_REGION             = var.data_store_region
 
-    # Additional substitutions
+    # Legacy variables for compatibility
+    _ARTIFACT_REGISTRY_REPO_NAME   = resource.google_artifact_registry_repository.repo-artifacts-genai.repository_id
+    _CONTAINER_NAME                = var.project_name
   }
   depends_on = [
     resource.google_project_service.cicd_services, 

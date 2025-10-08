@@ -31,13 +31,15 @@ steps:
       - "SERVICE_ACCOUNT=${_PIPELINE_SA_EMAIL_STAGING}"
       - "PIPELINE_NAME=${_PIPELINE_NAME}"
       - 'PATH=/usr/local/bin:/usr/bin:~/.local/bin'
-  # Build and Push
+  # Build and Push with both commit SHA and latest tags
   - name: "gcr.io/cloud-builders/docker"
     args:
       [
         "build",
         "-t",
-        "$_REGION-docker.pkg.dev/${_STAGING_PROJECT_ID}/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME",
+        "$_REGION-docker.pkg.dev/${_STAGING_PROJECT_ID}/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME:$COMMIT_SHA",
+        "-t",
+        "$_REGION-docker.pkg.dev/${_STAGING_PROJECT_ID}/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME:latest",
         "--build-arg",
         "COMMIT_SHA=$COMMIT_SHA",
         ".",
@@ -46,10 +48,16 @@ steps:
     args:
       [
         "push",
-        "$_REGION-docker.pkg.dev/${_STAGING_PROJECT_ID}/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME",
+        "$_REGION-docker.pkg.dev/${_STAGING_PROJECT_ID}/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME:$COMMIT_SHA",
+      ]
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "push",
+        "$_REGION-docker.pkg.dev/${_STAGING_PROJECT_ID}/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME:latest",
       ]
 
-  # Deploy to Staging
+  # Deploy to Staging using commit SHA
   - name: "gcr.io/cloud-builders/gcloud"
     id: deploy-staging
     entrypoint: gcloud
@@ -58,7 +66,7 @@ steps:
       - "deploy"
       - "my-agentic-rag"
       - "--image"
-      - "$_REGION-docker.pkg.dev/${_STAGING_PROJECT_ID}/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME"
+      - "$_REGION-docker.pkg.dev/${_STAGING_PROJECT_ID}/$_ARTIFACT_REGISTRY_REPO_NAME/$_CONTAINER_NAME:$COMMIT_SHA"
       - "--region"
       - "${_REGION}"
       - "--project"

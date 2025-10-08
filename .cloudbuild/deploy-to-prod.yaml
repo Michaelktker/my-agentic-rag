@@ -13,18 +13,18 @@
 # limitations under the License.
 
 steps:
-  # Pre-deployment validation
+  # Pre-deployment validation - verify specific commit SHA image exists
   - name: "gcr.io/cloud-builders/gcloud"
     id: validate-staging-image
     entrypoint: /bin/bash
     args:
       - "-c"
       - |
-        echo "🔍 Validating staging image availability..."
-        if gcloud container images describe us-central1-docker.pkg.dev/staging-adk/my-agentic-rag-docker-repo/my-agentic-rag:latest; then
-          echo "✅ Staging image verified"
+        echo "🔍 Validating staging image for commit ${COMMIT_SHA}..."
+        if gcloud container images describe us-central1-docker.pkg.dev/staging-adk/my-agentic-rag-docker-repo/my-agentic-rag:${COMMIT_SHA}; then
+          echo "✅ Staging image verified for commit ${COMMIT_SHA}"
         else
-          echo "❌ Staging image not found"
+          echo "❌ Staging image not found for commit ${COMMIT_SHA}"
           exit 1
         fi
 
@@ -50,7 +50,7 @@ steps:
       - "DISABLE_CACHING=${_DISABLE_CACHING}"
       - 'PATH=/usr/local/bin:/usr/bin:~/.local/bin'
 
-  # Deploy to Cloud Run Production
+  # Deploy to Cloud Run Production using specific commit SHA
   - name: "gcr.io/cloud-builders/gcloud"
     id: deploy-production
     entrypoint: gcloud
@@ -59,7 +59,7 @@ steps:
       - "deploy"
       - "my-agentic-rag"
       - "--image"
-      - "us-central1-docker.pkg.dev/staging-adk/my-agentic-rag-docker-repo/my-agentic-rag:latest"
+      - "us-central1-docker.pkg.dev/staging-adk/my-agentic-rag-docker-repo/my-agentic-rag:${COMMIT_SHA}"
       - "--region"
       - "${_REGION}"
       - "--project" 
@@ -133,6 +133,8 @@ steps:
         echo "🎉 PRODUCTION DEPLOYMENT SUCCESSFUL!"
         echo ""
         echo "🌟 Environment: PRODUCTION"
+        echo "🔗 Commit SHA: ${COMMIT_SHA}"
+        echo "🐳 Image: us-central1-docker.pkg.dev/staging-adk/my-agentic-rag-docker-repo/my-agentic-rag:${COMMIT_SHA}"
         echo "🌐 Production URL: ${_PROD_URL}"
         echo "📊 Console: https://console.cloud.google.com/run/detail/${_REGION}/my-agentic-rag?project=${_PROD_PROJECT_ID}"
         echo "📈 Monitoring: https://console.cloud.google.com/monitoring/dashboards?project=${_PROD_PROJECT_ID}"
