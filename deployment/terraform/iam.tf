@@ -125,3 +125,18 @@ resource "google_secret_manager_secret_iam_member" "github_pat_mcp_access" {
     google_service_account.app_sa
   ]
 }
+
+# Grant CI/CD service account access to GitHub PAT secret for integration tests
+resource "google_secret_manager_secret_iam_member" "github_pat_mcp_cicd_access" {
+  for_each = local.deploy_project_ids
+  
+  project   = each.value
+  secret_id = google_secret_manager_secret.github_pat_mcp[each.key].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cicd_runner_sa.email}"
+  
+  depends_on = [
+    google_secret_manager_secret.github_pat_mcp,
+    google_service_account.cicd_runner_sa
+  ]
+}
