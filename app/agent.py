@@ -112,6 +112,27 @@ When searching:
 
 Always be transparent about the sources of your information and the recency of the data."""
 
+# GitHub MCP agent prompt
+GITHUB_MCP_PROMPT = f"""You are a specialized GitHub agent with access to GitHub repository operations through MCP (Model Context Protocol) tools.
+
+Your role is to:
+1. Handle all GitHub repository operations efficiently
+2. Search and navigate repositories and files
+3. Access and analyze issues and pull requests
+4. Retrieve repository information and metadata
+5. Perform code analysis and understanding
+
+By default, you are working with the GitHub repository: {GITHUB_OWNER}/{GITHUB_REPO}
+When using GitHub tools, use this repository unless the user specifically requests a different one.
+
+When performing GitHub operations:
+- Use the most appropriate MCP tool for the requested operation
+- Provide clear and structured information from GitHub
+- Handle errors gracefully and provide helpful feedback
+- Be efficient in your tool usage
+
+Always be precise and thorough in your GitHub operations."""
+
 instruction = f"""You are an AI assistant for question-answering tasks.
 Answer to the best of your ability using the context provided.
 Leverage the Tools you are provided to answer questions.
@@ -119,17 +140,17 @@ If you already know the answer to a question, you can respond directly without u
 
 You have access to several specialized tools:
 1. Document retrieval from your knowledge base
-2. GitHub tools through MCP for repository operations
+2. GitHub operations through a specialized GitHub agent with MCP tools
 3. Web search capabilities through a specialized web search agent
 
-You also have access to GitHub tools through MCP that allow you to:
-- Search repositories and files
-- Get repository information
-- Access issues and pull requests
+The GitHub agent has full access to repository operations including:
+- Searching repositories and files
+- Getting repository information
+- Accessing issues and pull requests
 - And more GitHub operations
 
-By default, you are working with the GitHub repository: {GITHUB_OWNER}/{GITHUB_REPO}
-When using GitHub tools, use this repository unless the user specifies a different one.
+By default, the GitHub agent works with the repository: {GITHUB_OWNER}/{GITHUB_REPO}
+You can ask the GitHub agent to work with different repositories as needed.
 
 Use the web search agent when you need current information, recent updates, or information not available in your knowledge base.
 
@@ -172,6 +193,17 @@ mcp_tools = MCPToolset(
     ),
 )
 
+# Create the GitHub MCP subagent
+github_mcp_agent = Agent(
+    model="gemini-2.5-flash",
+    name="github_mcp_agent",
+    instruction=GITHUB_MCP_PROMPT,
+    tools=[mcp_tools],
+)
+
+# Create AgentTool from the GitHub MCP subagent
+github_mcp_tool = AgentTool(agent=github_mcp_agent)
+
 # Create the web search agent
 websearch_agent = Agent(
     model="gemini-2.5-flash",
@@ -183,7 +215,7 @@ websearch_agent = Agent(
 # Create AgentTool from the web search agent
 websearch_tool = AgentTool(agent=websearch_agent)
 
-tools = [mcp_tools, retrieve_docs, websearch_tool]
+tools = [retrieve_docs, github_mcp_tool, websearch_tool]
 
 root_agent = Agent(
     name="root_agent",
