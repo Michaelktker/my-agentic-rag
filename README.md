@@ -1,191 +1,280 @@
-# My Agentic RAG System
+# WhatsApp ADK Bot
 
-A production-ready Retrieval-Augmented Generation (RAG) agent built with Google's Agent Development Kit (ADK) that combines document retrieval with GitHub repository integration. The system provides intelligent responses by searching through indexed documents and can interact with GitHub repositories using Model Context Protocol (MCP) tools.
+A production-ready WhatsApp bot powered by Google's Agent Development Kit (ADK) that provides intelligent conversational AI through WhatsApp messaging. The bot integrates with a cloud-hosted ADK service to deliver RAG (Retrieval-Augmented Generation) capabilities, document search, and real-time AI responses.
 
 ## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        Production System                             │
+│                        WhatsApp Bot System                          │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Frontend: ADK Web UI → Backend: Cloud Run → Agent: RAG + GitHub    │
-│  ├── Document Retrieval: Vertex AI Search                          │
-│  ├── GitHub Integration: MCP Tools (Issues, PRs, Files)           │
-│  └── Secure Token Storage: Google Secret Manager                   │
+│  WhatsApp ↔ Baileys Library ↔ Node.js Bot ↔ Google ADK Service     │
+│  ├── Authentication: QR Code + Google Cloud Storage               │
+│  ├── Streaming: Server-Sent Events (SSE) for real-time responses  │
+│  ├── Session Management: User-specific conversation sessions       │
+│  └── AI Backend: ADK RAG Agent with document retrieval            │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Components
 
-- **ADK Agent** (`app/agent.py`): Core RAG agent with GitHub MCP integration
-- **Vertex AI Search**: Document indexing and retrieval backend  
-- **GitHub MCP Tools**: Repository interaction capabilities (issues, PRs, code search)
-- **Cloud Run**: Scalable serverless deployment
-- **Secret Manager**: Secure GitHub Personal Access Token storage
-- **CI/CD Pipeline**: Automated staging and production deployments
+- **WhatsApp Integration**: Baileys v6.7.8 library for WhatsApp Web API
+- **ADK Service**: Cloud-hosted AI agent at `https://my-agentic-rag-638797485217.us-central1.run.app`
+- **Authentication**: Google Cloud Storage for persistent WhatsApp auth state
+- **Streaming**: Real-time AI responses using Server-Sent Events
+- **Session Management**: User-specific conversation contexts
+- **Logging**: Structured logging with Pino for monitoring and debugging
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- **uv**: Python package manager - [Install](https://docs.astral.sh/uv/getting-started/installation/)
-- **Google Cloud CLI**: [Install](https://cloud.google.com/sdk/docs/install) and authenticate
-- **GitHub Personal Access Token**: For repository integration
+- **Node.js**: Version 18+ - [Install](https://nodejs.org/)
+- **Google Cloud Account**: For authentication state storage
+- **WhatsApp Account**: For bot registration
 
-### Local Development
+### Installation
 
 ```bash
 # Install dependencies
-make install
+npm install
 
-# Launch local development environment
-make playground
+# Start the bot
+npm start
 ```
 
-This opens the ADK web playground at `http://localhost:8080` where you can test the agent locally.
+### First-Time Setup
+
+1. **QR Code Scan**: When you first run the bot, it will display a QR code
+2. **WhatsApp Pairing**: Open WhatsApp on your phone and scan the QR code
+3. **Authentication**: The bot will connect and save auth state to Google Cloud Storage
+4. **Ready**: Bot will show "WhatsApp Bot Connected Successfully!" message
+
+## 📱 WhatsApp Bot Features
+
+### Core Functionality
+- **Conversational AI**: Natural language conversations powered by ADK
+- **Document Search**: Retrieval-augmented generation from knowledge base
+- **Real-time Responses**: Streaming responses for faster user experience
+- **Session Management**: Maintains conversation context per user
+- **Error Recovery**: Automatic session recreation on service errors
+
+### User Experience
+- **Processing Indicator**: Shows "🤖 *Processing your request...*" while thinking
+- **Complete Responses**: Delivers full AI responses in single, clean messages
+- **Persistent Sessions**: Remembers conversation context across messages
+- **Error Handling**: Graceful error messages for service issues
 
 ## 📋 Available Commands
 
 | Command | Description |
 |---------|-------------|
-| `make install` | Install all dependencies using uv |
-| `make playground` | Launch local ADK web development environment |
-| `make local-backend` | Run backend server only (for API testing) |
-| `make backend` | Deploy to Cloud Run staging environment |
-| `make test` | Run unit and integration tests |
-| `make lint` | Run code quality checks (ruff, mypy, codespell) |
-| `make data-ingestion` | Run document ingestion pipeline |
+| `npm install` | Install Node.js dependencies |
+| `npm start` | Start the WhatsApp bot |
+| `npm run dev` | Start bot in development mode with auto-restart |
 
-## 🌐 Deployed Services
+## 🔧 Configuration
 
-### Staging Environment
-- **Service URL**: `https://my-agentic-rag-aktu2chyfa-uc.a.run.app/dev-ui/`
-- **Project**: `staging-adk`
-- **Purpose**: Development testing and validation
+### Required Files
+- **`config.json`**: ADK service URL and authentication settings
+- **`package.json`**: Node.js dependencies and scripts
 
-### Production Environment  
-- **Service URL**: `https://my-agentic-rag-dyrqvuqk4a-uc.a.run.app/dev-ui/`
-- **Project**: `production-adk` 
-- **Purpose**: Production deployment with manual approval
-
-## 🔄 CI/CD Pipeline
-
-The system uses Google Cloud Build with automated deployments:
-
-1. **Staging**: Automatic deployment on push to `main` branch
-2. **Production**: Manual approval required after staging success
-
-### GitHub Triggers
-- `deploy-my-agentic-rag-staging`: Auto-deploy to staging
-- `deploy-my-agentic-rag`: Production deployment (requires approval)
-
-## 🔐 Security & Configuration
-
-### GitHub Integration
-The agent requires a GitHub Personal Access Token stored in Google Secret Manager:
-
-```bash
-# The token is automatically accessed from Secret Manager
-# Secret name: "github-personal-access-token"
-# Projects: staging-adk, production-adk
+### Key Settings in `config.json`
+```json
+{
+  "adk": {
+    "url": "https://my-agentic-rag-638797485217.us-central1.run.app",
+    "timeout": 30000
+  },
+  "gcs": {
+    "bucketName": "production-adk",
+    "authStateFile": "whatsapp-bot-auth.json"
+  },
+  "whatsapp": {
+    "browser": ["WhatsApp ADK Bot", "Chrome", "1.0.0"]
+  }
+}
 ```
 
-### Required Scopes
-- `repo`: Full repository access
-- `read:org`: Organization member access  
-- `read:user`: User profile access
+## 🌐 ADK Service Integration
+
+### Production ADK Service
+- **Service URL**: `https://my-agentic-rag-638797485217.us-central1.run.app`
+- **Endpoints**: 
+  - `/run`: Standard API calls
+  - `/run_sse`: Streaming responses (Server-Sent Events)
+  - `/apps/{app_name}/users/{user_id}/sessions`: Session management
+
+### Authentication & Sessions
+- Each WhatsApp user gets a unique ADK session
+- Sessions are created automatically on first interaction
+- Session IDs are maintained for conversation continuity
+
+## 🔐 Security & Authentication
+
+### Google Cloud Storage
+WhatsApp authentication state is stored securely in Google Cloud Storage:
+- **Bucket**: `production-adk`
+- **File**: `whatsapp-bot-auth.json`
+- **Purpose**: Persistent WhatsApp Web session to avoid re-scanning QR codes
+
+### ADK Service Authentication
+- Connects to production ADK service without additional authentication
+- Uses session-based communication for user context management
+- Automatic retry with new sessions on service errors
 
 ## 📁 Project Structure
 
 ```
 my-agentic-rag/
-├── app/                    # Core application
-│   ├── agent.py           # Main RAG agent with GitHub integration  
-│   ├── server.py          # FastAPI backend server
-│   ├── retrievers.py      # Document retrieval logic
-│   ├── templates.py       # Agent prompt templates
-│   └── utils/             # Utility functions
-├── .cloudbuild/           # CI/CD pipeline configurations
-├── deployment/            # Terraform infrastructure code
-│   ├── terraform/         # Production infrastructure
-│   └── dev/              # Development/staging infrastructure
-├── data_ingestion/        # Document ingestion pipeline
-├── tests/                 # Test suites
-│   ├── unit/             # Unit tests
-│   ├── integration/      # Integration tests
-│   └── load_test/        # Load testing
-├── notebooks/             # Jupyter notebooks for evaluation
-├── config/               # Environment configurations
-└── Makefile              # Development commands
+├── index.js                # Main WhatsApp bot application
+├── config.json            # Configuration settings
+├── package.json           # Node.js dependencies and scripts
+├── README.md              # This documentation
+├── WHATSAPP_README.md     # Original WhatsApp setup guide
+├── Dockerfile             # Docker containerization
+├── Makefile              # Build and deployment commands
+├── app/                   # Backend ADK service (Python)
+│   ├── agent.py          # RAG agent implementation
+│   ├── server.py         # FastAPI backend server
+│   ├── retrievers.py     # Document retrieval logic
+│   └── utils/            # Utility functions
+├── deployment/           # Infrastructure code
+│   └── terraform/        # Terraform configurations
+├── data_ingestion/       # Document processing pipeline
+├── tests/               # Test suites
+└── notebooks/           # Development notebooks
 ```
 
-## 🧠 Agent Capabilities
+## 🤖 Bot Behavior
 
-### Document Retrieval (RAG)
-- Searches indexed documents using Vertex AI Search
-- Provides context-aware responses based on document content
-- Supports various document types and formats
+### Message Flow
+1. **Receive**: User sends WhatsApp message
+2. **Process**: Bot shows "🤖 *Processing your request...*"
+3. **Stream**: Internal streaming from ADK service (not visible to user)
+4. **Respond**: Complete AI response sent as single message
 
-### GitHub Integration (MCP Tools)
-- **Repository Search**: Find files, code, issues, and PRs
-- **Issue Management**: Create, read, and comment on GitHub issues  
-- **Pull Request Operations**: List, create, and manage PRs
-- **Code Analysis**: Search and analyze repository code
-- **File Operations**: Read and understand repository structure
+### Session Management
+- **Creation**: New ADK session created for each unique WhatsApp user
+- **Retention**: Sessions maintained for conversation continuity
+- **Recovery**: Automatic session recreation on 500 errors from ADK service
+
+### Error Handling
+- **Connection Issues**: "AI service is currently unavailable"
+- **Timeouts**: "Request timed out. Please try again with a shorter message"
+- **Service Errors**: Automatic retry with new session creation
+
+## 🧠 AI Capabilities
+
+### Document Search & RAG
+- **Knowledge Base**: Searches through indexed documents
+- **Context-Aware**: Provides intelligent responses based on retrieved content
+- **Real-time**: Fast document retrieval and AI generation
+
+### Conversational Features
+- **Natural Language**: Understands and responds in natural conversation
+- **Context Retention**: Remembers conversation history within sessions
+- **Multi-turn Dialogs**: Supports back-and-forth conversations
 
 ### Usage Examples
 ```
-"Search for documents about machine learning deployment"
-"Find GitHub issues related to authentication bugs"  
-"Show me the latest pull requests in the backend repository"
-"What's the current status of issue #123?"
+User: "Search for information about metformin"
+Bot: [Returns detailed medical information about metformin]
+
+User: "Go to retrieve doc and tell me more about BigQuery"
+Bot: [Searches documents and provides BigQuery technical details]
+
+User: "What is Google Cloud?"
+Bot: [Combines document search with web search for comprehensive answer]
 ```
 
-## 🚀 Deployment Process
+## 🚀 Development & Deployment
 
-### Infrastructure Setup
-All infrastructure is managed via Terraform:
+### Local Development
+```bash
+# Clone the repository
+git clone <repository-url>
 
-1. **Development**: `deployment/terraform/dev/`
-2. **Production**: `deployment/terraform/`
+# Install dependencies
+npm install
 
-### Deployment Workflow
-1. Push code to `main` branch
-2. Cloud Build automatically deploys to staging
-3. Test staging deployment at the staging URL
-4. Manually approve production deployment in Cloud Console
-5. Production deployment completes automatically after approval
+# Start the bot
+npm start
+```
 
-## 📊 Monitoring & Observability
+### Docker Deployment
+```bash
+# Build Docker image
+docker build -t whatsapp-adk-bot .
 
-- **Cloud Logging**: Application logs and error tracking
-- **Cloud Trace**: Request tracing and performance monitoring  
-- **BigQuery**: Long-term event storage and analytics
-- **Health Checks**: Automated service health monitoring
+# Run container
+docker run -p 3000:3000 whatsapp-adk-bot
+```
 
-## 🔧 Development Workflow
+## 📊 Monitoring & Logging
 
-1. **Local Development**: Use `make playground` for rapid iteration
-2. **Testing**: Run `make test` before committing changes
-3. **Code Quality**: `make lint` ensures code standards
-4. **Staging Deploy**: Push to `main` triggers automatic staging deployment
-5. **Production**: Approve production deployment through Cloud Console
+### Structured Logging
+The bot uses Pino for structured JSON logging:
+- **Info**: Connection status, message handling, ADK responses
+- **Debug**: Streaming chunks, session management
+- **Error**: Service failures, authentication issues, timeouts
+- **Warn**: Retries, partial responses, parsing errors
 
-## 📚 Documentation
+### Log Examples
+```json
+{"level":30,"time":1696982345000,"msg":"Received message from 6592377976@s.whatsapp.net: Hi"}
+{"level":30,"time":1696982346000,"msg":"ADK Streaming Response Status: 200"}
+{"level":30,"time":1696982347000,"msg":"ADK Streaming Complete: 32 characters"}
+```
 
+## 🔧 Troubleshooting
+
+### Common Issues
+
+**QR Code Not Appearing**
+- Check internet connection
+- Verify Google Cloud Storage permissions
+- Clear browser cache and restart
+
+**Bot Not Responding**
+- Check ADK service status: `https://my-agentic-rag-638797485217.us-central1.run.app`
+- Verify session creation in logs
+- Check for 500 errors and automatic retries
+
+**Authentication Failures**
+- Ensure Google Cloud credentials are configured
+- Verify GCS bucket access permissions
+- Check auth state file in cloud storage
+
+### Debug Mode
+```bash
+# Enable detailed logging
+DEBUG=* npm start
+```
+
+## 📚 Additional Documentation
+
+- **WhatsApp Setup**: [`WHATSAPP_README.md`](WHATSAPP_README.md)
 - **Deployment Guide**: [`deployment/README.md`](deployment/README.md)
-- **Data Ingestion**: [`data_ingestion/README.md`](data_ingestion/README.md)
 - **Development Notes**: [`GEMINI.md`](GEMINI.md)
 
 ## 🏷️ Built With
 
+- [Baileys](https://github.com/WhiskeySockets/Baileys) - WhatsApp Web API
 - [Google Agent Development Kit (ADK)](https://cloud.google.com/agent-development-kit)
-- [Vertex AI Search](https://cloud.google.com/vertex-ai/docs/vector-search/overview)
-- [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol)
-- [Google Cloud Run](https://cloud.google.com/run)
-- [FastAPI](https://fastapi.tiangolo.com/)
-- [Terraform](https://terraform.io/)
+- [Google Cloud Storage](https://cloud.google.com/storage) - Authentication persistence
+- [Node.js](https://nodejs.org/) - Runtime environment
+- [Axios](https://axios-http.com/) - HTTP client for ADK communication
+- [Pino](https://getpino.io/) - High-performance logging
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Commit changes: `git commit -m 'Add amazing feature'`
+4. Push to branch: `git push origin feature/amazing-feature`
+5. Open a Pull Request
 
 ---
 
-*Last updated: October 5, 2025*
+*Last updated: October 10, 2025*

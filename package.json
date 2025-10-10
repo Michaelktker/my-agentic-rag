@@ -1,0 +1,37 @@
+{
+  "name": "whatsapp-adk-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp Bot integrated with Google ADK using Baileys",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "start:check": "./start-bot.sh",
+    "dev": "nodemon index.js",
+    "test": "node test-connection.js",
+    "test:adk": "node test-adk-run.js"
+  },
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "baileys",
+    "google-adk",
+    "chatbot"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.8",
+    "@hapi/boom": "^10.0.1",
+    "pino": "^8.19.0",
+    "pino-pretty": "^10.3.1",
+    "axios": "^1.6.7",
+    "@google-cloud/storage": "^7.7.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

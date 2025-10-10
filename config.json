@@ -1,0 +1,27 @@
+{
+  "adk": {
+    "url": "https://my-agentic-rag-638797485217.us-central1.run.app",
+    "appName": "app",
+    "timeout": 30000
+  },
+  "gcs": {
+    "projectId": "production-adk",
+    "bucketName": "authstate",
+    "authFolder": "whatsapp-auth"
+  },
+  "whatsapp": {
+    "browser": ["WhatsApp ADK Bot", "Chrome", "1.0.0"],
+    "printQRInTerminal": false,
+    "markOnlineOnConnect": true,
+    "syncFullHistory": false,
+    "generateHighQualityLinkPreview": true,
+    "defaultQueryTimeoutMs": 60000
+  },
+  "bot": {
+    "sessionCleanupIntervalMs": 3600000,
+    "sessionMaxAgeMs": 86400000,
+    "logLevel": "info",
+    "maxRetries": 3,
+    "retryDelayMs": 5000
+  }
+}
