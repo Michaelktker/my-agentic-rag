@@ -9,6 +9,8 @@ const path = require('path');
 const qrcode = require('qrcode-terminal');
 const { v4: uuidv4 } = require('uuid');
 const { fileTypeFromBuffer } = require('file-type');
+const XLSX = require('xlsx');
+const mammoth = require('mammoth');
 
 // Load configuration
 let config;
@@ -401,6 +403,46 @@ class MediaHandler {
     }
 
     /**
+     * Convert XLSX buffer to text format for Gemini compatibility
+     */
+    convertXlsxToText(buffer) {
+        try {
+            const workbook = XLSX.read(buffer, { type: 'buffer' });
+            let textContent = '';
+            
+            // Process each worksheet
+            workbook.SheetNames.forEach((sheetName, index) => {
+                const worksheet = workbook.Sheets[sheetName];
+                
+                // Add sheet header
+                textContent += `\n=== Sheet ${index + 1}: ${sheetName} ===\n`;
+                
+                // Convert sheet to CSV format (more readable than JSON)
+                const csvData = XLSX.utils.sheet_to_csv(worksheet);
+                textContent += csvData + '\n';
+            });
+            
+            return textContent;
+        } catch (error) {
+            logger.error('Error converting XLSX to text:', error);
+            throw new Error('Failed to process Excel file. Please ensure it\'s a valid XLSX file.');
+        }
+    }
+
+    /**
+     * Convert DOCX buffer to text format for Gemini compatibility
+     */
+    async convertDocxToText(buffer) {
+        try {
+            const result = await mammoth.extractRawText({ buffer });
+            return result.value;
+        } catch (error) {
+            logger.error('Error converting DOCX to text:', error);
+            throw new Error('Failed to process Word document. Please ensure it\'s a valid DOCX file.');
+        }
+    }
+
+    /**
      * Process media message and convert to ADK Part format
      */
     async processMediaMessage(message, userId) {
@@ -412,7 +454,8 @@ class MediaHandler {
             let mimeType = message.message.imageMessage?.mimetype ||
                           message.message.videoMessage?.mimetype ||
                           message.message.audioMessage?.mimetype ||
-                          message.message.documentMessage?.mimetype;
+                          message.message.documentMessage?.mimetype ||
+                          message.message.documentWithCaptionMessage?.message?.documentMessage?.mimetype;
             
             if (!mimeType) {
                 const fileTypeResult = await fileTypeFromBuffer(buffer);
@@ -420,9 +463,82 @@ class MediaHandler {
             }
 
             // Generate filename if not provided
-            let filename = message.message.documentMessage?.fileName;
+            let filename = message.message.documentMessage?.fileName ||
+                          message.message.documentWithCaptionMessage?.message?.documentMessage?.fileName;
             if (!filename) {
                 filename = this.generateRandomFilename(mimeType);
+            }
+
+            // Handle unsupported Office formats - convert to text since Gemini doesn't support them
+            if (mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+                logger.info(`Converting XLSX file to text format: ${filename}`);
+                
+                const textContent = this.convertXlsxToText(buffer);
+                
+                // Create text-based part for Gemini
+                const part = {
+                    inline_data: {
+                        mime_type: 'text/plain',
+                        data: Buffer.from(textContent).toString('base64')
+                    },
+                    mimeType: 'text/plain',
+                    data: Buffer.from(textContent)
+                };
+
+                // Save artifact with converted content
+                const version = await this.artifactService.saveArtifact(
+                    ADK_APP_NAME,
+                    userId,
+                    filename.replace('.xlsx', '.txt'), // Change extension to .txt
+                    part
+                );
+
+                logger.info(`Processed XLSX file as text: ${filename} -> ${filename.replace('.xlsx', '.txt')} (text/plain) v${version} for user ${userId}`);
+                
+                return {
+                    filename: filename.replace('.xlsx', '.txt'),
+                    mimeType: 'text/plain',
+                    version,
+                    part,
+                    converted: true,
+                    originalFormat: 'XLSX'
+                };
+            }
+
+            // Handle DOCX files - convert to text since Gemini doesn't support DOCX
+            if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+                logger.info(`Converting DOCX file to text format: ${filename}`);
+                
+                const textContent = await this.convertDocxToText(buffer);
+                
+                // Create text-based part for Gemini
+                const part = {
+                    inline_data: {
+                        mime_type: 'text/plain',
+                        data: Buffer.from(textContent).toString('base64')
+                    },
+                    mimeType: 'text/plain',
+                    data: Buffer.from(textContent)
+                };
+
+                // Save artifact with converted content
+                const version = await this.artifactService.saveArtifact(
+                    ADK_APP_NAME,
+                    userId,
+                    filename.replace('.docx', '.txt'), // Change extension to .txt
+                    part
+                );
+
+                logger.info(`Processed DOCX file as text: ${filename} -> ${filename.replace('.docx', '.txt')} (text/plain) v${version} for user ${userId}`);
+                
+                return {
+                    filename: filename.replace('.docx', '.txt'),
+                    mimeType: 'text/plain',
+                    version,
+                    part,
+                    converted: true,
+                    originalFormat: 'DOCX'
+                };
             }
 
             // Create ADK Part object (convert buffer to base64 for ADK API)
@@ -466,7 +582,8 @@ class MediaHandler {
             message.message?.imageMessage ||
             message.message?.videoMessage ||
             message.message?.audioMessage ||
-            message.message?.documentMessage
+            message.message?.documentMessage ||
+            message.message?.documentWithCaptionMessage
         );
     }
 
@@ -478,6 +595,7 @@ class MediaHandler {
         if (message.message?.videoMessage) return 'video';
         if (message.message?.audioMessage) return 'audio';
         if (message.message?.documentMessage) return 'document';
+        if (message.message?.documentWithCaptionMessage) return 'document';
         return null;
     }
 }
@@ -579,7 +697,23 @@ class WhatsAppBot {
     async handleIncomingMessages(m) {
         try {
             const message = m.messages[0];
-            if (!message.message) return;
+            
+            // Enhanced debugging for PDF uploads
+            logger.info(`Raw message received - message exists: ${!!message}`);
+            if (message) {
+                logger.info(`Message keys: ${Object.keys(message)}`);
+                if (message.message) {
+                    logger.info(`Message.message keys: ${Object.keys(message.message)}`);
+                    logger.info(`Full message structure:`, JSON.stringify(message, null, 2));
+                } else {
+                    logger.warn('Message.message is null/undefined');
+                }
+            }
+            
+            if (!message.message) {
+                logger.warn('Message has no content, skipping');
+                return;
+            }
 
             const remoteJid = message.key.remoteJid;
             const userId = remoteJid; // Use remoteJid as userId for ADK session
@@ -588,9 +722,27 @@ class WhatsAppBot {
             const hasMedia = this.mediaHandler.hasMedia(message);
             const messageText = this.extractMessageText(message);
             
+            // Enhanced media detection logging
+            logger.info(`Media detection:`, {
+                hasMedia,
+                messageText,
+                imageMessage: !!message.message?.imageMessage,
+                videoMessage: !!message.message?.videoMessage,
+                audioMessage: !!message.message?.audioMessage,
+                documentMessage: !!message.message?.documentMessage,
+                documentWithCaptionMessage: !!message.message?.documentWithCaptionMessage,
+                messageKeys: Object.keys(message.message || {})
+            });
+            
             // Skip if no text and no media
-            if (!messageText && !hasMedia) return;
-            if (!remoteJid) return;
+            if (!messageText && !hasMedia) {
+                logger.warn('Message has no text and no media, skipping');
+                return;
+            }
+            if (!remoteJid) {
+                logger.warn('Message has no remoteJid, skipping');
+                return;
+            }
 
             logger.info(`Received message from ${remoteJid}${hasMedia ? ' with media' : ''}: ${messageText || '[media only]'}`);
 
@@ -630,8 +782,18 @@ class WhatsAppBot {
                         }
                     });
                     
-                    await this.sendMessage(remoteJid, `✅ Uploaded ${mediaResult.filename} (${mediaResult.mimeType})`);
-                    logger.info(`Media processed: ${mediaResult.filename} for ${userId}`);
+                    if (mediaResult.converted) {
+                        if (mediaResult.originalFormat === 'XLSX') {
+                            await this.sendMessage(remoteJid, `📊 Excel file converted to text format for analysis: ${mediaResult.filename}`);
+                        } else if (mediaResult.originalFormat === 'DOCX') {
+                            await this.sendMessage(remoteJid, `📄 Word document converted to text format for analysis: ${mediaResult.filename}`);
+                        } else {
+                            await this.sendMessage(remoteJid, `🔄 ${mediaResult.originalFormat} file converted to text format: ${mediaResult.filename}`);
+                        }
+                    } else {
+                        await this.sendMessage(remoteJid, `✅ Uploaded ${mediaResult.filename} (${mediaResult.mimeType})`);
+                    }
+                    logger.info(`Media processed: ${mediaResult.filename} for ${userId}${mediaResult.converted ? ' [CONVERTED from ' + mediaResult.originalFormat + ']' : ''}`);
                 } catch (error) {
                     logger.error('Error processing media:', error);
                     await this.sendMessage(remoteJid, '❌ Sorry, I had trouble processing your media file. Please try again.');

@@ -29,10 +29,12 @@
     "@whiskeysockets/baileys": "^6.7.8",
     "axios": "^1.6.7",
     "file-type": "^21.0.0",
+    "mammoth": "^1.11.0",
     "pino": "^8.19.0",
     "pino-pretty": "^10.3.1",
     "qrcode-terminal": "^0.12.0",
-    "uuid": "^13.0.0"
+    "uuid": "^13.0.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "nodemon": "^3.0.3"
