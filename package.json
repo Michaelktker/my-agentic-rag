@@ -8,7 +8,11 @@
     "start:check": "./start-bot.sh",
     "dev": "nodemon index.js",
     "test": "node test-connection.js",
-    "test:adk": "node test-adk-run.js"
+    "test:adk": "node test-adk-run.js",
+    "test:artifacts": "node test-artifacts.js",
+    "test:media": "node test-media-artifacts.js",
+    "test:agent": "python test-agent-integration.py",
+    "test:e2e": "python test-end-to-end.py"
   },
   "keywords": [
     "whatsapp",
@@ -20,13 +24,15 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.8",
+    "@google-cloud/storage": "^7.7.0",
     "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.7.8",
+    "axios": "^1.6.7",
+    "file-type": "^21.0.0",
     "pino": "^8.19.0",
     "pino-pretty": "^10.3.1",
-    "axios": "^1.6.7",
-    "@google-cloud/storage": "^7.7.0",
-    "qrcode-terminal": "^0.12.0"
+    "qrcode-terminal": "^0.12.0",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.3"

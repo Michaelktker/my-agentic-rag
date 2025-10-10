@@ -7,6 +7,8 @@ const { Storage } = require('@google-cloud/storage');
 const fs = require('fs');
 const path = require('path');
 const qrcode = require('qrcode-terminal');
+const { v4: uuidv4 } = require('uuid');
+const { fileTypeFromBuffer } = require('file-type');
 
 // Load configuration
 let config;
@@ -21,11 +23,13 @@ try {
 const ADK_URL = process.env.ADK_URL || config.adk.url;
 const ADK_APP_NAME = process.env.ADK_APP_NAME || config.adk.appName;
 const BUCKET_NAME = process.env.BUCKET_NAME || config.gcs.bucketName;
+const ARTIFACTS_BUCKET_NAME = process.env.ARTIFACTS_BUCKET_NAME || config.gcs.artifactsBucketName;
 const PROJECT_ID = process.env.PROJECT_ID || config.gcs.projectId;
 
 // Initialize Google Cloud Storage
 const storage = new Storage({ projectId: PROJECT_ID });
 const bucket = storage.bucket(BUCKET_NAME);
+const artifactsBucket = storage.bucket(ARTIFACTS_BUCKET_NAME);
 
 // Logger configuration
 const logger = P({
@@ -160,6 +164,325 @@ class GCSAuthState {
 }
 
 /**
+ * GCS Artifact Service for ADK artifact management
+ * Implements artifact storage following ADK format requirements
+ */
+class GcsArtifactService {
+    constructor() {
+        this.bucketName = ARTIFACTS_BUCKET_NAME;
+        this.artifactsFolder = config.gcs.artifactsFolder;
+        this.storage = storage;
+        this.bucket = artifactsBucket;
+    }
+
+    /**
+     * Generate artifact path: artifacts/{appName}/{userId}/{filename}
+     * Note: Scoped by userId (not sessionId) as requested
+     */
+    getArtifactPath(appName, userId, filename) {
+        return `${this.artifactsFolder}/${appName}/${userId}/${filename}`;
+    }
+
+    /**
+     * Save artifact to GCS and return version number
+     */
+    async saveArtifact(appName, userId, filename, part) {
+        try {
+            const artifactPath = this.getArtifactPath(appName, userId, filename);
+            
+            // Convert Part object to storage format
+            const artifactData = {
+                mimeType: part.mimeType || part.inline_data?.mime_type || 'application/octet-stream',
+                data: part.data || part.inline_data?.data,
+                timestamp: new Date().toISOString(),
+                filename: filename
+            };
+
+            // Get existing versions to determine next version number
+            const versions = await this.listVersions(appName, userId, filename);
+            const nextVersion = versions.length > 0 ? Math.max(...versions) + 1 : 1;
+            
+            const versionedPath = `${artifactPath}/v${nextVersion}`;
+            
+            // Save artifact data as JSON
+            const fileBuffer = Buffer.from(JSON.stringify(artifactData, this.bufferJSONReplacer, 2));
+            
+            await this.bucket.file(versionedPath).save(fileBuffer, {
+                metadata: {
+                    contentType: 'application/json',
+                    customMetadata: {
+                        artifactVersion: nextVersion.toString(),
+                        originalMimeType: artifactData.mimeType,
+                        filename: filename
+                    }
+                }
+            });
+
+            logger.info(`Saved artifact ${filename} v${nextVersion} for user ${userId}`);
+            return nextVersion;
+            
+        } catch (error) {
+            logger.error(`Error saving artifact ${filename}:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Load artifact from GCS (latest version if no version specified)
+     */
+    async loadArtifact(appName, userId, filename, version = null) {
+        try {
+            const artifactPath = this.getArtifactPath(appName, userId, filename);
+            
+            let targetVersion = version;
+            if (!targetVersion) {
+                // Get latest version
+                const versions = await this.listVersions(appName, userId, filename);
+                if (versions.length === 0) {
+                    return null;
+                }
+                targetVersion = Math.max(...versions);
+            }
+
+            const versionedPath = `${artifactPath}/v${targetVersion}`;
+            const file = this.bucket.file(versionedPath);
+            
+            const [exists] = await file.exists();
+            if (!exists) {
+                return null;
+            }
+
+            const [data] = await file.download();
+            const artifactData = JSON.parse(data.toString(), this.bufferJSONReviver);
+            
+            // Return in ADK Part format
+            return {
+                inline_data: {
+                    mime_type: artifactData.mimeType,
+                    data: artifactData.data
+                },
+                mimeType: artifactData.mimeType,
+                data: artifactData.data
+            };
+            
+        } catch (error) {
+            logger.error(`Error loading artifact ${filename}:`, error);
+            return null;
+        }
+    }
+
+    /**
+     * List all versions for an artifact
+     */
+    async listVersions(appName, userId, filename) {
+        try {
+            const artifactPath = this.getArtifactPath(appName, userId, filename);
+            const [files] = await this.bucket.getFiles({
+                prefix: `${artifactPath}/v`
+            });
+
+            const versions = files
+                .map(file => {
+                    const match = file.name.match(/\/v(\d+)$/);
+                    return match ? parseInt(match[1]) : null;
+                })
+                .filter(v => v !== null)
+                .sort((a, b) => a - b);
+
+            return versions;
+        } catch (error) {
+            logger.error(`Error listing versions for ${filename}:`, error);
+            return [];
+        }
+    }
+
+    /**
+     * List all artifact filenames for a user
+     */
+    async listArtifactKeys(appName, userId) {
+        try {
+            const userPath = `${this.artifactsFolder}/${appName}/${userId}/`;
+            const [files] = await this.bucket.getFiles({
+                prefix: userPath
+            });
+
+            const filenames = new Set();
+            files.forEach(file => {
+                // Extract filename from path: artifacts/app/userId/filename/v1 -> filename
+                const relativePath = file.name.substring(userPath.length);
+                const pathParts = relativePath.split('/');
+                if (pathParts.length >= 2 && pathParts[1].startsWith('v')) {
+                    filenames.add(pathParts[0]);
+                }
+            });
+
+            return Array.from(filenames).sort();
+        } catch (error) {
+            logger.error(`Error listing artifacts for user ${userId}:`, error);
+            return [];
+        }
+    }
+
+    /**
+     * Delete all versions of an artifact
+     */
+    async deleteArtifact(appName, userId, filename) {
+        try {
+            const artifactPath = this.getArtifactPath(appName, userId, filename);
+            const [files] = await this.bucket.getFiles({
+                prefix: `${artifactPath}/`
+            });
+
+            const deletePromises = files.map(file => file.delete());
+            await Promise.all(deletePromises);
+            
+            logger.info(`Deleted artifact ${filename} for user ${userId}`);
+        } catch (error) {
+            logger.error(`Error deleting artifact ${filename}:`, error);
+            throw error;
+        }
+    }
+
+    // Buffer JSON handling for proper serialization (reuse from GCSAuthState)
+    bufferJSONReplacer(key, value) {
+        if (value?.type === 'Buffer' && Array.isArray(value?.data)) {
+            return { __buffer_type: true, data: value.data };
+        }
+        return value;
+    }
+
+    bufferJSONReviver(key, value) {
+        if (value?.__buffer_type) {
+            return Buffer.from(value.data);
+        }
+        return value;
+    }
+}
+
+/**
+ * Media File Handler for WhatsApp messages
+ */
+class MediaHandler {
+    constructor(artifactService) {
+        this.artifactService = artifactService;
+    }
+
+    /**
+     * Generate a random filename if not provided
+     */
+    generateRandomFilename(mimeType) {
+        const uuid = uuidv4();
+        const extension = this.getExtensionFromMimeType(mimeType);
+        return `media_${uuid}${extension}`;
+    }
+
+    /**
+     * Get file extension from MIME type
+     */
+    getExtensionFromMimeType(mimeType) {
+        const mimeToExt = {
+            'image/jpeg': '.jpg',
+            'image/png': '.png',
+            'image/gif': '.gif',
+            'image/webp': '.webp',
+            'audio/mpeg': '.mp3',
+            'audio/ogg': '.ogg',
+            'audio/wav': '.wav',
+            'audio/mp4': '.m4a',
+            'video/mp4': '.mp4',
+            'video/quicktime': '.mov',
+            'video/x-msvideo': '.avi',
+            'application/pdf': '.pdf',
+            'text/plain': '.txt',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx'
+        };
+        return mimeToExt[mimeType] || '.bin';
+    }
+
+    /**
+     * Process media message and convert to ADK Part format
+     */
+    async processMediaMessage(message, userId) {
+        try {
+            // Download media from WhatsApp
+            const buffer = await downloadMediaMessage(message, 'buffer', {});
+            
+            // Detect file type if not provided
+            let mimeType = message.message.imageMessage?.mimetype ||
+                          message.message.videoMessage?.mimetype ||
+                          message.message.audioMessage?.mimetype ||
+                          message.message.documentMessage?.mimetype;
+            
+            if (!mimeType) {
+                const fileTypeResult = await fileTypeFromBuffer(buffer);
+                mimeType = fileTypeResult?.mime || 'application/octet-stream';
+            }
+
+            // Generate filename if not provided
+            let filename = message.message.documentMessage?.fileName;
+            if (!filename) {
+                filename = this.generateRandomFilename(mimeType);
+            }
+
+            // Create ADK Part object (convert buffer to base64 for ADK API)
+            const part = {
+                inline_data: {
+                    mime_type: mimeType,
+                    data: buffer.toString('base64')
+                },
+                mimeType: mimeType,
+                data: buffer
+            };
+
+            // Save artifact
+            const version = await this.artifactService.saveArtifact(
+                ADK_APP_NAME,
+                userId,
+                filename,
+                part
+            );
+
+            logger.info(`Processed media file: ${filename} (${mimeType}) v${version} for user ${userId}`);
+            
+            return {
+                filename,
+                mimeType,
+                version,
+                part
+            };
+
+        } catch (error) {
+            logger.error('Error processing media message:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Check if message contains media
+     */
+    hasMedia(message) {
+        return !!(
+            message.message?.imageMessage ||
+            message.message?.videoMessage ||
+            message.message?.audioMessage ||
+            message.message?.documentMessage
+        );
+    }
+
+    /**
+     * Get media type from message
+     */
+    getMediaType(message) {
+        if (message.message?.imageMessage) return 'image';
+        if (message.message?.videoMessage) return 'video';
+        if (message.message?.audioMessage) return 'audio';
+        if (message.message?.documentMessage) return 'document';
+        return null;
+    }
+}
+
+/**
  * WhatsApp Bot Class
  */
 class WhatsAppBot {
@@ -167,6 +490,8 @@ class WhatsAppBot {
         this.sock = null;
         this.authState = new GCSAuthState();
         this.activeSessions = new Map(); // Store user sessions
+        this.artifactService = new GcsArtifactService();
+        this.mediaHandler = new MediaHandler(this.artifactService);
     }
 
     async initialize() {
@@ -257,14 +582,17 @@ class WhatsAppBot {
             if (!message.message) return;
 
             const remoteJid = message.key.remoteJid;
+            const userId = remoteJid; // Use remoteJid as userId for ADK session
+            
+            // Check if message contains media
+            const hasMedia = this.mediaHandler.hasMedia(message);
             const messageText = this.extractMessageText(message);
             
-            if (!messageText || !remoteJid) return;
+            // Skip if no text and no media
+            if (!messageText && !hasMedia) return;
+            if (!remoteJid) return;
 
-            logger.info(`Received message from ${remoteJid}: ${messageText}`);
-
-            // Use remoteJid as userId for ADK session
-            const userId = remoteJid;
+            logger.info(`Received message from ${remoteJid}${hasMedia ? ' with media' : ''}: ${messageText || '[media only]'}`);
 
             // Create or get session for this user
             let session = this.activeSessions.get(userId);
@@ -288,8 +616,34 @@ class WhatsAppBot {
                 session.lastActivity = new Date();
             }
 
-            // Send message to ADK with streaming
-            const response = await this.sendToADK(messageText, session.sessionId, userId, remoteJid);
+            // Process media if present
+            let mediaParts = [];
+            if (hasMedia) {
+                try {
+                    const mediaResult = await this.mediaHandler.processMediaMessage(message, userId);
+                    
+                    // Create Part object for ADK (use base64 data)
+                    mediaParts.push({
+                        inline_data: {
+                            mime_type: mediaResult.mimeType,
+                            data: mediaResult.part.inline_data.data
+                        }
+                    });
+                    
+                    await this.sendMessage(remoteJid, `✅ Uploaded ${mediaResult.filename} (${mediaResult.mimeType})`);
+                    logger.info(`Media processed: ${mediaResult.filename} for ${userId}`);
+                } catch (error) {
+                    logger.error('Error processing media:', error);
+                    await this.sendMessage(remoteJid, '❌ Sorry, I had trouble processing your media file. Please try again.');
+                    return;
+                }
+            }
+
+            // Prepare message for ADK (combine text and media)
+            let adkMessage = messageText || 'I\'ve uploaded a media file for you to analyze.';
+            
+            // Send message to ADK with streaming (including media parts)
+            const response = await this.sendToADK(adkMessage, session.sessionId, userId, remoteJid, mediaParts);
             
             if (response) {
                 // Send complete response back to WhatsApp in one message
@@ -344,39 +698,45 @@ class WhatsAppBot {
         }
     }
 
-    async sendToADK(message, sessionId, userId, jid) {
+    async sendToADK(message, sessionId, userId, jid, mediaParts = []) {
         try {
+            // Prepare message parts (text + media)
+            const parts = [
+                {
+                    text: message
+                }
+            ];
+            
+            // Add media parts if present
+            if (mediaParts && mediaParts.length > 0) {
+                parts.push(...mediaParts);
+            }
+
             const payload = {
                 appName: ADK_APP_NAME,
                 userId: userId,
                 sessionId: sessionId,
                 newMessage: {
-                    parts: [
-                        {
-                            text: message
-                        }
-                    ],
+                    parts: parts,
                     role: "user"
                 },
-                streaming: true // Enable streaming for real-time responses
+                streaming: false // Disable streaming to test non-streaming responses
             };
 
-            logger.info(`Sending to ADK (streaming): ${JSON.stringify(payload)}`);
+            logger.info(`Sending to ADK (non-streaming): ${JSON.stringify(payload)}`);
 
-            // Use streaming endpoint
-            const response = await axios.post(`${ADK_URL}/run_sse`, payload, {
+            // Use regular endpoint for non-streaming
+            const response = await axios.post(`${ADK_URL}/run`, payload, {
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'text/event-stream'
+                    'Content-Type': 'application/json'
                 },
-                responseType: 'stream',
                 timeout: config.adk.timeout,
                 validateStatus: function (status) {
                     return status >= 200 && status < 600;
                 }
             });
 
-            logger.info(`ADK Streaming Response Status: ${response.status}`);
+            logger.info(`ADK Response Status: ${response.status}`);
             
             // Handle 500 errors - might be invalid session, try creating a new one
             if (response.status === 500) {
@@ -392,29 +752,29 @@ class WhatsAppBot {
                         this.activeSessions.get(userId).sessionId = newSessionId;
                     }
                     
-                    // Retry streaming request
-                    return await this.sendToADK(message, newSessionId, userId, jid);
+                    // Retry non-streaming request
+                    return await this.sendToADK(message, newSessionId, userId, jid, mediaParts);
                 }
                 
                 logger.error(`ADK Service Error: Unable to create new session`);
                 return 'I apologize, but the AI service is currently experiencing issues. The development team has been notified. Please try again later.';
             }
             
-            // Process successful streaming response
+            // Process successful non-streaming response
             if (response.status === 200) {
-                return await this.handleStreamingResponse(response.data, jid);
+                return this.handleNonStreamingResponse(response.data, jid);
             }
 
             // Fallback - return informative error message
-            logger.info(`ADK Streaming Error Status: ${response.status}`);
+            logger.info(`ADK Error Status: ${response.status}`);
             return 'I received your message, but the AI service returned an unexpected response. Please try again.';
 
         } catch (error) {
-            logger.error('Error calling ADK Streaming API:', error.message);
+            logger.error('Error calling ADK API:', error.message);
             
             // Return error message to user
             if (error.response) {
-                logger.error(`ADK Streaming Error Response: ${JSON.stringify(error.response.data)}`);
+                logger.error(`ADK Error Response: ${JSON.stringify(error.response.data)}`);
                 return `Sorry, I encountered an error: ${error.response.status} ${error.response.statusText}`;
             } else if (error.code === 'ECONNREFUSED') {
                 return 'Sorry, the AI service is currently unavailable. Please try again later.';
@@ -431,9 +791,6 @@ class WhatsAppBot {
             let buffer = '';
             let fullResponse = '';
             let hasStarted = false;
-            
-            // Send initial "thinking" indicator only once
-            this.sendMessage(jid, '🤖 *Processing your request...*');
             
             stream.on('data', (chunk) => {
                 buffer += chunk.toString();
@@ -505,6 +862,52 @@ class WhatsAppBot {
         });
     }
 
+    handleNonStreamingResponse(data, jid) {
+        try {
+            logger.info(`ADK Non-Streaming Response: ${JSON.stringify(data)}`);
+            
+            // Extract response from data
+            let responseText = '';
+            
+            if (data && data.response) {
+                responseText = data.response;
+            } else if (data && data.content && data.content.parts) {
+                const textPart = data.content.parts.find(part => part.text);
+                if (textPart) {
+                    responseText = textPart.text;
+                }
+            } else if (typeof data === 'string') {
+                responseText = data;
+            } else if (Array.isArray(data)) {
+                // Handle array response format
+                for (const event of data) {
+                    if (event.content && event.content.parts && event.content.parts.length > 0) {
+                        const textPart = event.content.parts.find(part => part.text);
+                        if (textPart) {
+                            responseText = textPart.text;
+                            break;
+                        }
+                    } else if (event.response) {
+                        responseText = event.response;
+                        break;
+                    }
+                }
+            }
+            
+            if (responseText) {
+                logger.info(`ADK Final Response: ${responseText.substring(0, 100)}... (${responseText.length} characters)`);
+                return responseText;
+            } else {
+                logger.warn('No valid response text found in ADK response');
+                return 'I received your message, but the AI service returned an unexpected response format. Please try rephrasing your question.';
+            }
+            
+        } catch (error) {
+            logger.error('Error handling non-streaming response:', error);
+            return 'Sorry, I encountered an error processing the AI response. Please try again.';
+        }
+    }
+
     parseADKResponse(data) {
         try {
             // ADK returns an array of events, we need to extract the response
@@ -540,11 +943,89 @@ class WhatsAppBot {
 
     async sendMessage(jid, text) {
         try {
-            await this.sock.sendMessage(jid, { text: text });
-            logger.info(`Sent message to ${jid}: ${text}`);
+            // WhatsApp has message length limits, so we need to chunk long messages
+            const maxLength = 800; // More conservative limit for reliable WhatsApp delivery
+            
+            if (text.length <= maxLength) {
+                await this.sock.sendMessage(jid, { text: text });
+                logger.info(`Sent message to ${jid}: ${text}`);
+            } else {
+                // Split long messages into chunks
+                const chunks = this.splitMessage(text, maxLength);
+                for (let i = 0; i < chunks.length; i++) {
+                    const chunk = chunks[i];
+                    const chunkText = chunks.length > 1 ? `📄 *Part ${i + 1}/${chunks.length}*\n\n${chunk}` : chunk;
+                    
+                    await this.sock.sendMessage(jid, { text: chunkText });
+                    logger.info(`Sent message chunk ${i + 1}/${chunks.length} to ${jid}: ${chunk.substring(0, 100)}...`);
+                    
+                    // Add small delay between chunks
+                    if (i < chunks.length - 1) {
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                    }
+                }
+            }
         } catch (error) {
             logger.error(`Failed to send message to ${jid}:`, error);
         }
+    }
+
+    splitMessage(text, maxLength) {
+        if (text.length <= maxLength) {
+            return [text];
+        }
+
+        const chunks = [];
+        let currentChunk = '';
+        
+        // Split by sentences first, then by words if needed
+        const sentences = text.split(/([.!?]+\s*)/);
+        
+        for (let i = 0; i < sentences.length; i++) {
+            const sentence = sentences[i];
+            
+            if ((currentChunk + sentence).length <= maxLength) {
+                currentChunk += sentence;
+            } else {
+                if (currentChunk) {
+                    chunks.push(currentChunk.trim());
+                    currentChunk = '';
+                }
+                
+                // If single sentence is too long, split by words
+                if (sentence.length > maxLength) {
+                    const words = sentence.split(' ');
+                    let wordChunk = '';
+                    
+                    for (const word of words) {
+                        if ((wordChunk + ' ' + word).length <= maxLength) {
+                            wordChunk += (wordChunk ? ' ' : '') + word;
+                        } else {
+                            if (wordChunk) {
+                                chunks.push(wordChunk);
+                                wordChunk = word;
+                            } else {
+                                // Single word is too long, force split
+                                chunks.push(word.substring(0, maxLength));
+                                wordChunk = word.substring(maxLength);
+                            }
+                        }
+                    }
+                    
+                    if (wordChunk) {
+                        currentChunk = wordChunk;
+                    }
+                } else {
+                    currentChunk = sentence;
+                }
+            }
+        }
+        
+        if (currentChunk) {
+            chunks.push(currentChunk.trim());
+        }
+        
+        return chunks.filter(chunk => chunk.length > 0);
     }
 
     handleMessageUpdates(updates) {

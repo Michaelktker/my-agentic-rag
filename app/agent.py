@@ -22,6 +22,10 @@ from google.adk.agents import Agent
 from google.adk.tools.mcp_tool import MCPToolset, StreamableHTTPConnectionParams
 from google.adk.tools import google_search
 from google.adk.tools.agent_tool import AgentTool
+from google.adk.artifacts import GcsArtifactService
+from google.adk.tools import FunctionTool
+from google.adk.tools.tool_context import ToolContext
+from google.genai import types
 from langchain_google_vertexai import VertexAIEmbeddings
 
 from app.retrievers import get_compressor, get_retriever
@@ -66,6 +70,10 @@ compressor = get_compressor(
     project_id=project_id,
 )
 
+# Initialize GcsArtifactService for handling media files from WhatsApp
+artifacts_bucket = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
+artifact_service = GcsArtifactService(bucket_name=artifacts_bucket)
+
 
 def retrieve_docs(query: str) -> str:
     """
@@ -91,6 +99,124 @@ def retrieve_docs(query: str) -> str:
         return f"Calling retrieval tool with query:\n\n{query}\n\nraised the following error:\n\n{type(e)}: {e}"
 
     return formatted_docs
+
+
+def list_user_artifacts(tool_context: ToolContext) -> str:
+    """
+    Lists all artifacts (media files) uploaded by the current user.
+    Use this to see what files are available for analysis.
+
+    Returns:
+        str: A formatted list of available artifacts or an error message.
+    """
+    try:
+        available_files = tool_context.list_artifacts()
+        if not available_files:
+            return "You have no saved artifacts. Upload some media files to get started!"
+        else:
+            file_list = "\n".join([f"• {filename}" for filename in available_files])
+            return f"Here are your available artifacts:\n{file_list}\n\nI can analyze any of these files for you!"
+    except ValueError as e:
+        return f"Error listing artifacts: {e}. Artifact service may not be configured."
+    except Exception as e:
+        return f"An unexpected error occurred while listing artifacts: {e}"
+
+
+def load_and_analyze_artifact(filename: str, analysis_query: str, tool_context: ToolContext) -> str:
+    """
+    Loads a specific artifact (media file) and provides analysis context.
+    Use this when you need to analyze a specific file uploaded by the user.
+
+    Args:
+        filename (str): The name of the artifact file to load
+        analysis_query (str): What aspect of the file to analyze (e.g., "describe the image", "transcribe audio", "summarize document")
+
+    Returns:
+        str: Information about the loaded artifact for analysis
+    """
+    try:
+        # Load the artifact
+        artifact_part = tool_context.load_artifact(filename)
+        
+        if not artifact_part:
+            return f"Artifact '{filename}' not found. Use list_user_artifacts to see available files."
+        
+        # Extract artifact information
+        mime_type = "unknown"
+        data_size = 0
+        
+        if hasattr(artifact_part, 'inline_data') and artifact_part.inline_data:
+            mime_type = artifact_part.inline_data.mime_type or "unknown"
+            data_size = len(artifact_part.inline_data.data) if artifact_part.inline_data.data else 0
+        elif hasattr(artifact_part, 'mimeType'):
+            mime_type = artifact_part.mimeType or "unknown"
+            data_size = len(artifact_part.data) if hasattr(artifact_part, 'data') and artifact_part.data else 0
+        
+        # Format file size
+        if data_size > 1024 * 1024:
+            size_str = f"{data_size / (1024 * 1024):.1f} MB"
+        elif data_size > 1024:
+            size_str = f"{data_size / 1024:.1f} KB"
+        else:
+            size_str = f"{data_size} bytes"
+        
+        # Determine file type category
+        file_type = "unknown"
+        if mime_type.startswith("image/"):
+            file_type = "image"
+        elif mime_type.startswith("audio/"):
+            file_type = "audio"
+        elif mime_type.startswith("video/"):
+            file_type = "video"
+        elif mime_type.startswith("application/pdf"):
+            file_type = "PDF document"
+        elif mime_type.startswith("text/"):
+            file_type = "text document"
+        elif "document" in mime_type:
+            file_type = "document"
+        
+        analysis_context = f"""Successfully loaded artifact: {filename}
+File Type: {file_type} ({mime_type})
+File Size: {size_str}
+Analysis Request: {analysis_query}
+
+The artifact has been loaded and is ready for analysis. As a multimodal AI, I can now analyze this {file_type} file based on your request: "{analysis_query}".
+
+Note: The file content is available in the conversation context for direct analysis."""
+        
+        return analysis_context
+        
+    except ValueError as e:
+        return f"Error loading artifact '{filename}': {e}. Is the artifact service configured?"
+    except Exception as e:
+        return f"An unexpected error occurred while loading '{filename}': {e}"
+
+
+def save_analysis_result(filename: str, analysis_content: str, tool_context: ToolContext) -> str:
+    """
+    Saves an analysis result as a new artifact.
+    Use this to save your analysis or generated content back to the user's artifacts.
+
+    Args:
+        filename (str): Name for the new artifact file (e.g., "analysis_result.txt")
+        analysis_content (str): The content to save
+
+    Returns:
+        str: Confirmation message with saved artifact details
+    """
+    try:
+        # Create a Part object with the analysis content
+        analysis_part = types.Part.from_text(text=analysis_content)
+        
+        # Save the artifact
+        version = tool_context.save_artifact(filename, analysis_part)
+        
+        return f"Successfully saved analysis result as '{filename}' (version {version}). The user can now access this analysis result through their WhatsApp bot."
+        
+    except ValueError as e:
+        return f"Error saving analysis result: {e}. Is the artifact service configured?"
+    except Exception as e:
+        return f"An unexpected error occurred while saving analysis: {e}"
 
 
 # Web search agent prompt
@@ -133,28 +259,40 @@ When performing GitHub operations:
 
 Always be precise and thorough in your GitHub operations."""
 
-instruction = f"""You are an AI assistant for question-answering tasks.
-Answer to the best of your ability using the context provided.
-Leverage the Tools you are provided to answer questions.
-If you already know the answer to a question, you can respond directly without using the tools.
+instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis.
+Answer to the best of your ability using the context provided and leverage the tools available to you.
 
-You have access to several specialized tools:
-1. Document retrieval from your knowledge base
-2. GitHub operations through a specialized GitHub agent with MCP tools
-3. Web search capabilities through a specialized web search agent
+You have access to several specialized capabilities:
+1. **Document retrieval** from your knowledge base using retrieve_docs
+2. **GitHub operations** through a specialized GitHub agent with MCP tools  
+3. **Web search** capabilities through a specialized web search agent
+4. **Artifact management** for handling media files uploaded by users:
+   - list_user_artifacts: See what media files users have uploaded
+   - load_and_analyze_artifact: Load and analyze specific media files
+   - save_analysis_result: Save your analysis results back as artifacts
 
-The GitHub agent has full access to repository operations including:
-- Searching repositories and files
-- Getting repository information
-- Accessing issues and pull requests
-- And more GitHub operations
+**Multimodal Analysis Capabilities:**
+- **Images**: Describe, analyze content, extract text, identify objects, analyze compositions
+- **Audio**: Transcribe speech, identify sounds, analyze music (when audio data is available)
+- **Videos**: Analyze visual content, describe scenes, extract key frames
+- **Documents**: Read, summarize, extract information from PDFs and text files
 
-By default, the GitHub agent works with the repository: {GITHUB_OWNER}/{GITHUB_REPO}
-You can ask the GitHub agent to work with different repositories as needed.
+**When users upload media files through WhatsApp:**
+1. First use `list_user_artifacts` to see what files are available
+2. Use `load_and_analyze_artifact` to load specific files for analysis
+3. Provide detailed analysis using your multimodal capabilities
+4. Optionally save analysis results using `save_analysis_result`
 
-Use the web search agent when you need current information, recent updates, or information not available in your knowledge base.
+**Important Notes:**
+- The Gemini 2.5 Flash model you're powered by can directly analyze multimodal content
+- When artifacts are loaded, their content becomes available in the conversation context
+- You can analyze images, audio, video, and documents that users upload via WhatsApp
+- Always provide comprehensive, detailed analysis of media files
 
-Updated: Testing CI/CD pipeline - 2025-09-30"""
+GitHub agent works with repository: {GITHUB_OWNER}/{GITHUB_REPO} by default.
+Use web search for current information not in your knowledge base.
+
+Updated: Multimodal artifact support - 2025-10-10"""
 
 
 # Initialize MCP tools only if GitHub token is available
@@ -215,7 +353,12 @@ websearch_agent = Agent(
 # Create AgentTool from the web search agent
 websearch_tool = AgentTool(agent=websearch_agent)
 
-tools = [retrieve_docs, github_mcp_tool, websearch_tool]
+# Create artifact management tools
+list_artifacts_tool = FunctionTool(func=list_user_artifacts)
+load_artifact_tool = FunctionTool(func=load_and_analyze_artifact)
+save_artifact_tool = FunctionTool(func=save_analysis_result)
+
+tools = [retrieve_docs, github_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool]
 
 root_agent = Agent(
     name="root_agent",

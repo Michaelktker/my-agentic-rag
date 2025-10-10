@@ -39,6 +39,10 @@ create_bucket_if_not_exists(
     bucket_name=bucket_name, project=project_id, location="us-central1"
 )
 
+# Configure artifacts bucket for media files from WhatsApp
+artifacts_bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
+artifacts_bucket_uri = f"gs://{artifacts_bucket_name}"
+
 provider = TracerProvider()
 processor = export.BatchSpanProcessor(CloudTraceLoggingSpanExporter())
 provider.add_span_processor(processor)
@@ -64,7 +68,7 @@ session_service_uri = f"agentengine://{agent_engine.resource_name}"
 app: FastAPI = get_fast_api_app(
     agents_dir=AGENT_DIR,
     web=True,
-    artifact_service_uri=bucket_name,
+    artifact_service_uri=artifacts_bucket_uri,
     allow_origins=allow_origins,
     session_service_uri=session_service_uri,
 )
