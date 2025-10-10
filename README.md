@@ -57,6 +57,7 @@ A production-ready system that combines:
    - Google Cloud Storage auth state management
    - ADK streaming integration with Server-Sent Events
    - Full media file processing (images, audio, video, documents)
+   - Office document conversion (XLSX → CSV, DOCX → text) for Gemini compatibility
    - User session management with automatic cleanup
    - GcsArtifactService for media storage
 
@@ -138,6 +139,7 @@ A production-ready system that combines:
 ### WhatsApp Bot Features
 - **QR Code Authentication**: Easy WhatsApp Web setup and pairing
 - **Media Processing**: Images, audio, video, documents with ADK integration
+- **Office Document Support**: Automatic XLSX/DOCX to text conversion for Gemini compatibility
 - **Session Management**: Each user gets a unique ADK session
 - **Automatic Reconnection**: Handles connection drops gracefully
 - **Real-time Responses**: Streaming responses from ADK using Server-Sent Events
@@ -151,9 +153,27 @@ A production-ready system that combines:
   - **Audio**: Transcription, sound identification (when supported)
   - **Video**: Scene analysis, key frame extraction, content understanding
   - **Documents**: Text extraction, summarization, analysis, information retrieval
+  - **Office Documents**: XLSX/DOCX automatic conversion to text for Gemini processing
 - **GitHub Integration**: Repository search, file access, issue/PR management
 - **Document Retrieval**: Vertex AI Search for intelligent information access
 - **Artifact Management**: Save, load, and analyze user-uploaded files with versioning
+
+### Office Document Processing
+
+The system automatically handles Microsoft Office documents that are not natively supported by Google's Gemini AI:
+
+- **XLSX Files**: Converted to CSV format using the `xlsx` library, preserving data structure
+- **DOCX Files**: Converted to plain text using the `mammoth` library, maintaining readability
+- **User Feedback**: Clear indication when conversion is happening ("Converting office document to text...")
+- **Seamless Integration**: Converted files are processed through the same ADK pipeline as other documents
+
+**Supported Formats**:
+- ✅ PDF (native Gemini support)
+- ✅ Images (JPG, PNG, GIF, WebP)
+- ✅ Audio (MP3, WAV, etc.)
+- ✅ Video (MP4, AVI, etc.)
+- ✅ XLSX → CSV (automatic conversion)
+- ✅ DOCX → Text (automatic conversion)
 
 ### Storage Architecture
 ```
@@ -161,7 +181,7 @@ gs://adk_artifact/
 └── artifacts/
     └── app/                    # Application namespace
         └── {userId}/           # WhatsApp user ID (e.g., 1234567890@s.whatsapp.net)
-            └── {filename}/     # Media filename (e.g., image_123.png)
+            └── {filename}/     # Media filename (e.g., image_123.png, report.xlsx)
                 ├── v1          # Version 1 of the file
                 ├── v2          # Version 2 of the file
                 └── v3          # Latest version
@@ -203,7 +223,8 @@ my-agentic-rag/
 
 #### WhatsApp Bot (`index.js`)
 - **GcsArtifactService**: Media file storage and retrieval with versioning
-- **MediaHandler**: WhatsApp media processing and ADK conversion
+- **MediaHandler**: WhatsApp media processing and ADK conversion with XLSX/DOCX support
+- **Document Conversion**: Automatic XLSX to CSV and DOCX to text conversion using xlsx and mammoth libraries
 - **ADK Integration**: Streaming communication with agent using SSE
 - **Session Management**: User-specific conversation contexts
 
@@ -287,6 +308,10 @@ docker run -p 8000:8000 adk-server
    User: [Sends an audio file]
    Bot: 🤖 Processing your audio...
    Bot: [Transcription and audio content analysis]
+   
+   User: [Sends an XLSX/DOCX file]
+   Bot: 🤖 Converting office document to text for processing...
+   Bot: [Converted text content analysis and insights]
    ```
 
 3. **Artifact Management**:
@@ -454,6 +479,8 @@ PYTHONPATH=. python -m app.server --log-level debug
 ### Supporting Libraries
 - **[Axios](https://axios-http.com/)** - HTTP client for ADK communication
 - **[Pino](https://getpino.io/)** - High-performance logging for Node.js
+- **[XLSX](https://www.npmjs.com/package/xlsx)** - Excel file parsing and conversion to CSV
+- **[Mammoth](https://www.npmjs.com/package/mammoth)** - DOCX to text conversion
 - **[Vertex AI](https://cloud.google.com/vertex-ai)** - Document search and retrieval
 - **[Google Cloud Run](https://cloud.google.com/run)** - Serverless deployment platform
 
