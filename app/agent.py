@@ -255,10 +255,8 @@ async def generate_image(prompt: str, tool_context: ToolContext) -> str:
         # Get the generated image
         generated_image = images[0]
         
-        # Convert PIL Image to bytes
-        img_byte_arr = BytesIO()
-        generated_image.save(img_byte_arr, format='PNG', optimize=True, quality=95)
-        img_bytes = img_byte_arr.getvalue()
+        # Convert Vertex AI GeneratedImage to bytes
+        img_bytes = generated_image._image_bytes
         
         # Create filename for artifact storage
         timestamp = int(time.time())
