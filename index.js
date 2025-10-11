@@ -808,8 +808,23 @@ class WhatsAppBot {
             const response = await this.sendToADK(adkMessage, session.sessionId, userId, remoteJid, mediaParts);
             
             if (response) {
-                // Send complete response back to WhatsApp in one message
-                await this.sendMessage(remoteJid, response);
+                // Handle multimodal response (text + images)
+                if (typeof response === 'object' && (response.text || response.images)) {
+                    // Send text message if present
+                    if (response.text) {
+                        await this.sendMessage(remoteJid, response.text);
+                    }
+                    
+                    // Send images if present
+                    if (response.images && response.images.length > 0) {
+                        for (const image of response.images) {
+                            await this.sendImage(remoteJid, image);
+                        }
+                    }
+                } else {
+                    // Fallback for text-only responses
+                    await this.sendMessage(remoteJid, response);
+                }
             }
 
         } catch (error) {
@@ -1028,15 +1043,23 @@ class WhatsAppBot {
         try {
             logger.info(`ADK Non-Streaming Response: ${JSON.stringify(data)}`);
             
-            // Extract response from data
+            // Extract response from data - return both text and images
             let responseText = '';
+            let imageParts = [];
             
             if (data && data.response) {
                 responseText = data.response;
             } else if (data && data.content && data.content.parts) {
-                const textPart = data.content.parts.find(part => part.text);
-                if (textPart) {
-                    responseText = textPart.text;
+                // Process all parts - text and images
+                for (const part of data.content.parts) {
+                    if (part.text) {
+                        responseText += part.text;
+                    } else if (part.inline_data && part.inline_data.mime_type && part.inline_data.data) {
+                        imageParts.push({
+                            mimeType: part.inline_data.mime_type,
+                            data: part.inline_data.data
+                        });
+                    }
                 }
             } else if (typeof data === 'string') {
                 responseText = data;
@@ -1044,9 +1067,17 @@ class WhatsAppBot {
                 // Handle array response format
                 for (const event of data) {
                     if (event.content && event.content.parts && event.content.parts.length > 0) {
-                        const textPart = event.content.parts.find(part => part.text);
-                        if (textPart) {
-                            responseText = textPart.text;
+                        for (const part of event.content.parts) {
+                            if (part.text) {
+                                responseText += part.text;
+                            } else if (part.inline_data && part.inline_data.mime_type && part.inline_data.data) {
+                                imageParts.push({
+                                    mimeType: part.inline_data.mime_type,
+                                    data: part.inline_data.data
+                                });
+                            }
+                        }
+                        if (responseText || imageParts.length > 0) {
                             break;
                         }
                     } else if (event.response) {
@@ -1056,17 +1087,26 @@ class WhatsAppBot {
                 }
             }
             
-            if (responseText) {
-                logger.info(`ADK Final Response: ${responseText.substring(0, 100)}... (${responseText.length} characters)`);
-                return responseText;
+            if (responseText || imageParts.length > 0) {
+                logger.info(`ADK Final Response: Text=${responseText ? responseText.substring(0, 100) + '...' : 'none'} Images=${imageParts.length}`);
+                return {
+                    text: responseText || 'Here\'s your generated image:',
+                    images: imageParts
+                };
             } else {
-                logger.warn('No valid response text found in ADK response');
-                return 'I received your message, but the AI service returned an unexpected response format. Please try rephrasing your question.';
+                logger.warn('No valid response text or images found in ADK response');
+                return {
+                    text: 'I received your message, but the AI service returned an unexpected response format. Please try rephrasing your question.',
+                    images: []
+                };
             }
             
         } catch (error) {
             logger.error('Error handling non-streaming response:', error);
-            return 'Sorry, I encountered an error processing the AI response. Please try again.';
+            return {
+                text: 'Sorry, I encountered an error processing the AI response. Please try again.',
+                images: []
+            };
         }
     }
 
@@ -1129,6 +1169,27 @@ class WhatsAppBot {
             }
         } catch (error) {
             logger.error(`Failed to send message to ${jid}:`, error);
+        }
+    }
+
+    async sendImage(jid, imageData) {
+        try {
+            // Convert base64 to Buffer
+            const buffer = Buffer.from(imageData.data, 'base64');
+            
+            logger.info(`Sending image to ${jid}: ${imageData.mimeType}, size: ${buffer.length} bytes`);
+            
+            await this.sock.sendMessage(jid, { 
+                image: buffer, 
+                mimetype: imageData.mimeType,
+                caption: '🎨 Generated image'
+            });
+            
+            logger.info(`Successfully sent image to ${jid}`);
+        } catch (error) {
+            logger.error(`Failed to send image to ${jid}:`, error);
+            // Fallback - send error message
+            await this.sendMessage(jid, '❌ Sorry, I had trouble sending the generated image. Please try again.');
         }
     }
 

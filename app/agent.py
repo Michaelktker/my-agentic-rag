@@ -15,6 +15,9 @@
 # mypy: disable-error-code="arg-type"
 # Full deployment test - October 3, 2025 - Testing complete CI/CD pipeline
 import os
+import time
+import base64
+from io import BytesIO
 
 import google
 import vertexai
@@ -27,6 +30,7 @@ from google.adk.tools import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 from langchain_google_vertexai import VertexAIEmbeddings
+from vertexai.preview.vision_models import ImageGenerationModel
 
 from app.retrievers import get_compressor, get_retriever
 from app.templates import format_docs
@@ -219,6 +223,83 @@ async def save_analysis_result(filename: str, analysis_content: str, tool_contex
         return f"An unexpected error occurred while saving analysis: {e}"
 
 
+async def generate_image(prompt: str, tool_context: ToolContext) -> str:
+    """
+    Generate an image using Vertex AI Imagen model.
+    The generated image will be included directly in the agent's response.
+
+    Args:
+        prompt (str): Detailed description of the image to generate
+        tool_context (ToolContext): Context for adding image to conversation
+
+    Returns:
+        str: Success message with generation details
+    """
+    try:
+        # Initialize the latest Imagen model
+        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-001")
+        
+        # Generate the image with optimized parameters for WhatsApp
+        images = model.generate_images(
+            prompt=prompt,
+            number_of_images=1,
+            language="en",
+            aspect_ratio="1:1",  # Square format works well for WhatsApp
+            safety_filter_level="allow_most",
+            person_generation="allow_adult"
+        )
+        
+        if not images:
+            return "Failed to generate image. Please try a different prompt."
+        
+        # Get the generated image
+        generated_image = images[0]
+        
+        # Convert PIL Image to bytes
+        img_byte_arr = BytesIO()
+        generated_image.save(img_byte_arr, format='PNG', optimize=True, quality=95)
+        img_bytes = img_byte_arr.getvalue()
+        
+        # Create filename for artifact storage
+        timestamp = int(time.time())
+        filename = f"generated_image_{timestamp}.png"
+        
+        # Create Part object for the image
+        image_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
+        
+        # Add the image directly to the conversation response
+        # This makes the image available in the ADK API response
+        await tool_context.add_to_conversation(image_part)
+        
+        # Also save as artifact for persistence
+        version = await tool_context.save_artifact(filename, image_part)
+        
+        # Calculate file size
+        size_mb = len(img_bytes) / (1024 * 1024)
+        
+        return f"""✅ Successfully generated image: "{prompt}"
+
+📁 Saved as: {filename} (version {version})  
+📏 Size: {size_mb:.1f} MB
+🖼️ Format: PNG (1024x1024)
+🎨 Model: Imagen 3.0
+
+The generated image is included in this response."""
+        
+    except Exception as e:
+        error_msg = str(e)
+        
+        # Handle common errors with helpful messages
+        if "safety" in error_msg.lower():
+            return f"❌ Image generation blocked by safety filters. Please try a different prompt that doesn't include potentially harmful content.\n\nOriginal prompt: {prompt}"
+        elif "quota" in error_msg.lower() or "limit" in error_msg.lower():
+            return "❌ Image generation quota exceeded. Please try again later or contact support."
+        elif "invalid" in error_msg.lower():
+            return f"❌ Invalid prompt for image generation. Please provide a more descriptive prompt.\n\nOriginal prompt: {prompt}"
+        else:
+            return f"❌ Error generating image: {error_msg}\n\nPlease try a different prompt or contact support if the issue persists."
+
+
 # Web search agent prompt
 WEBSEARCH_PROMPT = """You are a specialized web search agent focused on finding accurate, up-to-date information from the internet.
 
@@ -259,7 +340,8 @@ When performing GitHub operations:
 
 Always be precise and thorough in your GitHub operations."""
 
-instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis.
+instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis, PLUS image generation.
+
 Answer to the best of your ability using the context provided and leverage the tools available to you.
 
 You have access to several specialized capabilities:
@@ -270,6 +352,15 @@ You have access to several specialized capabilities:
    - list_user_artifacts: See what media files users have uploaded
    - load_and_analyze_artifact: Load and analyze specific media files
    - save_analysis_result: Save your analysis results back as artifacts
+5. **Image generation** using Vertex AI Imagen:
+   - generate_image: Create images from detailed text descriptions
+
+**Image Generation Guidelines:**
+- When users request image creation (words like "generate", "create", "make", "draw" an image), use the generate_image tool
+- Always use detailed, descriptive prompts for better image generation results
+- Generated images are automatically included in your response AND saved as artifacts
+- Handle safety filter rejections gracefully with alternative suggestions
+- Common requests: portraits, landscapes, objects, scenes, artwork, logos, etc.
 
 **Multimodal Analysis Capabilities:**
 - **Images**: Describe, analyze content, extract text, identify objects, analyze compositions
@@ -283,16 +374,23 @@ You have access to several specialized capabilities:
 3. Provide detailed analysis using your multimodal capabilities
 4. Optionally save analysis results using `save_analysis_result`
 
+**When users request image generation:**
+1. Use `generate_image` with a detailed, descriptive prompt
+2. The image will be automatically included in your response
+3. The image is also saved as an artifact for future reference
+4. If generation fails, provide helpful suggestions for alternative prompts
+
 **Important Notes:**
+- You can both ANALYZE existing images and GENERATE new images
+- Generated images are included directly in your responses AND saved as artifacts
 - The Gemini 2.5 Flash model you're powered by can directly analyze multimodal content
 - When artifacts are loaded, their content becomes available in the conversation context
-- You can analyze images, audio, video, and documents that users upload via WhatsApp
 - Always provide comprehensive, detailed analysis of media files
 
 GitHub agent works with repository: {GITHUB_OWNER}/{GITHUB_REPO} by default.
 Use web search for current information not in your knowledge base.
 
-Updated: Multimodal artifact support - 2025-10-10"""
+Updated: Added image generation with direct API response inclusion - 2025-10-11"""
 
 
 # Initialize MCP tools only if GitHub token is available
@@ -358,7 +456,10 @@ list_artifacts_tool = FunctionTool(func=list_user_artifacts)
 load_artifact_tool = FunctionTool(func=load_and_analyze_artifact)
 save_artifact_tool = FunctionTool(func=save_analysis_result)
 
-tools = [retrieve_docs, github_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool]
+# Create image generation tool
+generate_image_tool = FunctionTool(func=generate_image)
+
+tools = [retrieve_docs, github_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, generate_image_tool]
 
 root_agent = Agent(
     name="root_agent",
