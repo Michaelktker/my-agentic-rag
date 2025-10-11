@@ -32,9 +32,17 @@ A production-ready system that combines:
 ### Current Status
 - ✅ **Production Ready**: Deployed to staging and production environments
 - ✅ **WhatsApp Bot**: Full media support with ADK artifact integration
+- ✅ **Image Generation**: Complete Vertex AI Imagen 3.0 integration with WhatsApp delivery
+- ✅ **Multimodal AI**: Text, image analysis, audio/video processing, and document handling
 - ✅ **CI/CD Pipeline**: Automated deployments with manual production approval
 - ✅ **Security**: GitHub tokens managed via Google Secret Manager
 - ✅ **Monitoring**: Cloud Logging, Tracing, and observability enabled
+
+**Latest Updates (October 2025)**:
+- 🎨 **Image Generation**: End-to-end image creation using Imagen 3.0 with direct WhatsApp delivery
+- 🔧 **Artifact System**: Fixed GCS artifact loading with enhanced debugging and error handling
+- 📱 **WhatsApp Integration**: Seamless image delivery with proper Baileys format support
+- 🚀 **Performance**: Optimized artifact processing with session-scoped storage paths
 
 ## 🏗️ Architecture
 
@@ -139,13 +147,15 @@ A production-ready system that combines:
 ### WhatsApp Bot Features
 - **QR Code Authentication**: Easy WhatsApp Web setup and pairing
 - **Media Processing**: Images, audio, video, documents with ADK integration
+- **Image Generation**: Create images using Vertex AI Imagen 3.0 with direct WhatsApp delivery
 - **Office Document Support**: Automatic XLSX/DOCX to text conversion for Gemini compatibility
-- **Session Management**: Each user gets a unique ADK session
-- **Automatic Reconnection**: Handles connection drops gracefully
+- **Session Management**: Each user gets a unique ADK session with persistent storage
+- **Automatic Reconnection**: Handles connection drops gracefully with state recovery
 - **Real-time Responses**: Streaming responses from ADK using Server-Sent Events
-- **File Versioning**: User-scoped media storage with version control
-- **Processing Indicators**: User feedback during media processing
-- **Error Recovery**: Automatic session recreation on service errors
+- **File Versioning**: User-scoped media storage with version control and GCS integration
+- **Processing Indicators**: User feedback during media processing and image generation
+- **Error Recovery**: Automatic session recreation on service errors with enhanced debugging
+- **Multimodal Conversations**: Seamless text, image analysis, and image generation in single conversations
 
 ### ADK Agent Capabilities
 - **Multimodal Analysis**: 
@@ -154,9 +164,32 @@ A production-ready system that combines:
   - **Video**: Scene analysis, key frame extraction, content understanding
   - **Documents**: Text extraction, summarization, analysis, information retrieval
   - **Office Documents**: XLSX/DOCX automatic conversion to text for Gemini processing
-- **GitHub Integration**: Repository search, file access, issue/PR management
+- **Image Generation**: 
+  - **Vertex AI Imagen 3.0**: High-quality image creation from text descriptions
+  - **WhatsApp Integration**: Direct delivery of generated images via chat
+  - **Aspect Ratio Optimization**: Square format (1:1) optimized for mobile viewing
+  - **Safety Filtering**: Content safety with graceful error handling
+- **GitHub Integration**: Repository search, file access, issue/PR management via MCP tools
 - **Document Retrieval**: Vertex AI Search for intelligent information access
-- **Artifact Management**: Save, load, and analyze user-uploaded files with versioning
+- **Artifact Management**: Save, load, and analyze user-uploaded files with session-scoped versioning
+- **Web Search**: Real-time information retrieval with source attribution
+
+### Image Generation System
+
+The bot includes a complete image generation pipeline using Vertex AI Imagen 3.0:
+
+- **Natural Language Prompts**: Users can request images using natural language descriptions
+- **High-Quality Generation**: Imagen 3.0 produces 1024x1024 PNG images optimized for mobile viewing
+- **Direct WhatsApp Delivery**: Generated images are automatically sent through WhatsApp using proper Baileys format
+- **Artifact Integration**: All generated images are saved as session-scoped artifacts for future reference
+- **Safety Filtering**: Content safety with graceful error handling and alternative suggestions
+- **Real-time Feedback**: Users receive immediate confirmation and generation details
+
+**Example Flow**:
+1. User: "Generate a picture of a cute hamster eating cheese"
+2. Bot: 🤖 Generating image...
+3. Bot: [Sends generated image] ✅ Successfully generated image using Imagen 3.0
+4. Image automatically saved as artifact: `generated_image_1760203066.png`
 
 ### Office Document Processing
 
@@ -169,22 +202,27 @@ The system automatically handles Microsoft Office documents that are not nativel
 
 **Supported Formats**:
 - ✅ PDF (native Gemini support)
-- ✅ Images (JPG, PNG, GIF, WebP)
+- ✅ Images (JPG, PNG, GIF, WebP) - Analysis & Generation
 - ✅ Audio (MP3, WAV, etc.)
 - ✅ Video (MP4, AVI, etc.)
 - ✅ XLSX → CSV (automatic conversion)
 - ✅ DOCX → Text (automatic conversion)
+- 🎨 **Image Generation**: Vertex AI Imagen 3.0 (PNG, 1024x1024, optimized for WhatsApp)
 
 ### Storage Architecture
 ```
 gs://adk_artifact/
-└── artifacts/
-    └── app/                    # Application namespace
-        └── {userId}/           # WhatsApp user ID (e.g., 1234567890@s.whatsapp.net)
-            └── {filename}/     # Media filename (e.g., image_123.png, report.xlsx)
-                ├── v1          # Version 1 of the file
-                ├── v2          # Version 2 of the file
-                └── v3          # Latest version
+├── artifacts/                  # Legacy user-scoped storage
+│   └── app/{userId}/{filename}/v{n}
+└── app/                       # ADK session-scoped storage (current)
+    └── {userId}/              # WhatsApp user ID (e.g., 1234567890@s.whatsapp.net)
+        └── {sessionId}/       # ADK session ID (e.g., 7504650094931607552)
+            └── {filename}/    # Artifact filename (e.g., generated_image_1760203066.png)
+                └── 0          # Version (ADK uses 0 for latest)
+
+Examples:
+- Generated Image: gs://adk_artifact/app/6592377976@s.whatsapp.net/7504650094931607552/generated_image_1760203066.png/0
+- Uploaded Media: gs://adk_artifact/artifacts/app/user123/document.pdf/v1
 
 gs://authstate/
 └── whatsapp-auth.json          # WhatsApp authentication state
@@ -229,12 +267,15 @@ my-agentic-rag/
 - **Session Management**: User-specific conversation contexts
 
 #### ADK Agent (`app/agent.py`)
+- **Image Generation Tools**: 
+  - `generate_image`: Creates images using Vertex AI Imagen 3.0 with direct artifact integration
 - **Artifact Tools**: 
-  - `list_user_artifacts`: Lists all media files uploaded by user
-  - `load_and_analyze_artifact`: Loads and analyzes specific artifacts
+  - `list_user_artifacts`: Lists all media files uploaded by user (including generated images)
+  - `load_and_analyze_artifact`: Loads and analyzes specific artifacts with multimodal support
   - `save_analysis_result`: Saves AI analysis results as versioned artifacts
-- **GitHub Tools**: Repository search, file access, issue management
-- **Retrieval Tools**: Document search and context provision via Vertex AI
+- **GitHub Tools**: Repository search, file access, issue management via MCP integration
+- **Web Search Tools**: Real-time information retrieval with source attribution
+- **Retrieval Tools**: Document search and context provision via Vertex AI Search
 
 ### Environment Variables
 ```bash
@@ -299,11 +340,15 @@ docker run -p 8000:8000 adk-server
    Bot: [Searches GitHub and returns relevant issues and PRs]
    ```
 
-2. **Media Analysis**:
+2. **Media Analysis & Image Generation**:
    ```
    User: [Sends an image of a document]
    Bot: 🤖 Processing your image...
    Bot: [Detailed OCR results and document analysis]
+   
+   User: "Generate a picture of a cute hamster eating cheese"
+   Bot: 🤖 Generating image...
+   Bot: [Sends generated image directly] ✅ Successfully generated image using Imagen 3.0
    
    User: [Sends an audio file]
    Bot: 🤖 Processing your audio...
@@ -317,10 +362,18 @@ docker run -p 8000:8000 adk-server
 3. **Artifact Management**:
    ```
    User: "List my uploaded files"
-   Bot: [Shows all user's uploaded media with versions]
+   Bot: Here are your available artifacts:
+        • generated_image_1760203066.png
+        • document_analysis.pdf
+        • voice_memo.mp3
    
-   User: "Analyze the image I sent earlier"
-   Bot: [Loads specific artifact and provides detailed analysis]
+   User: "Analyze the image I generated earlier"
+   Bot: [Loads and analyzes the generated hamster image]
+        "The artifact is an image showing a cute, fat hamster happily 
+         munching on a block of cheese, in cartoon style."
+   
+   User: "Describe the only artifact I have"
+   Bot: [Provides detailed analysis of the specific artifact]
    ```
 
 ### API Endpoints
@@ -427,16 +480,29 @@ npm run test:integration
    curl https://my-agentic-rag-638797485217.us-central1.run.app/health
    ```
 
-3. **Media Processing Errors**:
+3. **Image Generation Not Working**:
+   - Verify Vertex AI Imagen API is enabled
+   - Check artifact service initialization: `this.artifactService` (not `this.gcsArtifactService`)
+   - Review GCS permissions for `adk_artifact` bucket
+   - Test GCS connectivity: `gsutil ls gs://adk_artifact/`
+
+4. **Media Processing Errors**:
    - Verify GCS bucket permissions and access
    - Check artifact bucket connectivity and quotas
    - Review media file size limits and formats
-   - Validate ADK service artifact endpoints
+   - Validate ADK service artifact endpoints with session-scoped paths
 
-4. **Session Management Issues**:
+5. **Session Management Issues**:
    ```bash
    # Check session status
    curl -X POST https://my-agentic-rag-638797485217.us-central1.run.app/apps/app/users/{user_id}/sessions
+   ```
+
+6. **Artifact Loading Failures**:
+   ```bash
+   # Test specific artifact path
+   gsutil ls gs://adk_artifact/app/{user_id}/{session_id}/{artifact_name}/0
+   # Check enhanced debugging logs in bot console for detailed error information
    ```
 
 ### Debug Mode
@@ -481,7 +547,8 @@ PYTHONPATH=. python -m app.server --log-level debug
 - **[Pino](https://getpino.io/)** - High-performance logging for Node.js
 - **[XLSX](https://www.npmjs.com/package/xlsx)** - Excel file parsing and conversion to CSV
 - **[Mammoth](https://www.npmjs.com/package/mammoth)** - DOCX to text conversion
-- **[Vertex AI](https://cloud.google.com/vertex-ai)** - Document search and retrieval
+- **[Vertex AI](https://cloud.google.com/vertex-ai)** - Document search, retrieval, and Imagen 3.0 image generation
+- **[Google Cloud Storage](https://cloud.google.com/storage)** - Artifact storage with session-scoped paths
 - **[Google Cloud Run](https://cloud.google.com/run)** - Serverless deployment platform
 
 ### Development Tools
