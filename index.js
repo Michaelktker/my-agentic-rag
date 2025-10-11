@@ -274,6 +274,101 @@ class GcsArtifactService {
     }
 
     /**
+     * Test GCS connectivity and authentication
+     */
+    async testGCSConnection() {
+        try {
+            logger.info('Testing GCS connection...');
+            const [files] = await this.bucket.getFiles({ maxResults: 1 });
+            logger.info(`GCS connection successful. Found ${files.length} files in bucket.`);
+            return true;
+        } catch (error) {
+            logger.error('GCS connection failed:', error.message);
+            logger.error('Error details:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Load artifact from GCS by session ID (ADK session-scoped artifacts)
+     */
+    async loadArtifactBySession(appName, userId, sessionId, filename, version = 0) {
+        try {
+            // First test GCS connectivity
+            logger.info('Testing GCS connection before artifact loading...');
+            const isConnected = await this.testGCSConnection();
+            if (!isConnected) {
+                logger.error('GCS connection test failed - aborting artifact load');
+                return null;
+            }
+            
+            // ADK stores artifacts in: app/userId/sessionId/filename/version
+            const artifactPath = `${appName}/${userId}/${sessionId}/${filename}/${version}`;
+            logger.info(`Loading artifact from path: ${artifactPath}`);
+            
+            const file = this.bucket.file(artifactPath);
+            
+            logger.info('Checking if artifact exists...');
+            const [exists] = await Promise.race([
+                file.exists(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout checking file existence')), 10000))
+            ]);
+            logger.info(`Artifact exists check: ${exists} for path: ${artifactPath}`);
+            
+            if (!exists) {
+                logger.warn(`Artifact not found: ${artifactPath}`);
+                return null;
+            }
+
+            logger.info(`Downloading artifact: ${artifactPath}`);
+            // ADK stores raw image data, not JSON wrapped data
+            const [imageBuffer] = await Promise.race([
+                file.download(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout downloading file')), 30000))
+            ]);
+            logger.info(`Downloaded ${imageBuffer.length} bytes for artifact: ${filename}`);
+            
+            // Convert to base64 for WhatsApp/Baileys
+            const base64Data = imageBuffer.toString('base64');
+            logger.info(`Converted to base64, length: ${base64Data.length}`);
+            
+            // Determine MIME type from filename
+            let mimeType = 'image/png';
+            if (filename.includes('.jpg') || filename.includes('.jpeg')) {
+                mimeType = 'image/jpeg';
+            } else if (filename.includes('.webp')) {
+                mimeType = 'image/webp';
+            }
+            
+            logger.info(`Artifact loaded successfully: ${filename}, mimeType: ${mimeType}`);
+            
+            // Return in format expected by WhatsApp bot
+            return {
+                mimeType: mimeType,
+                data: base64Data
+            };
+            
+        } catch (error) {
+            // Use console.error to avoid logger truncation
+            console.error('=== ARTIFACT LOADING ERROR DETAILS ===');
+            console.error(`Error loading session artifact ${filename}:`);
+            console.error(`Error message: ${error.message}`);
+            console.error(`Error name: ${error.name}`);
+            console.error(`Error code: ${error.code}`);
+            console.error(`Artifact path: ${artifactPath}`);
+            console.error('Full error object:', error);
+            console.error('Error stack trace:');
+            console.error(error.stack);
+            console.error('=== END ERROR DETAILS ===');
+            
+            // Also log to the regular logger
+            logger.error(`Error loading session artifact ${filename}: ${error.message}`);
+            
+            return null;
+        }
+    }
+
+    /**
      * List all versions for an artifact
      */
     async listVersions(appName, userId, filename) {
@@ -939,7 +1034,7 @@ class WhatsAppBot {
             
             // Process successful non-streaming response
             if (response.status === 200) {
-                return this.handleNonStreamingResponse(response.data, jid);
+                return await this.handleNonStreamingResponse(response.data, jid, sessionId);
             }
 
             // Fallback - return informative error message
@@ -1039,13 +1134,14 @@ class WhatsAppBot {
         });
     }
 
-    handleNonStreamingResponse(data, jid) {
+    async handleNonStreamingResponse(data, jid, sessionId) {
         try {
             logger.info(`ADK Non-Streaming Response: ${JSON.stringify(data)}`);
             
             // Extract response from data - return both text and images
             let responseText = '';
             let imageParts = [];
+            let artifactImages = [];
             
             if (data && data.response) {
                 responseText = data.response;
@@ -1077,21 +1173,43 @@ class WhatsAppBot {
                                 });
                             }
                         }
-                        if (responseText || imageParts.length > 0) {
-                            break;
-                        }
                     } else if (event.response) {
                         responseText = event.response;
-                        break;
+                    }
+
+                    // Check for artifact images in artifactDelta
+                    if (event.actions && event.actions.artifactDelta) {
+                        const userId = this.getUserIdFromJid(jid);
+                        for (const artifactName in event.actions.artifactDelta) {
+                            // Check if this is an image artifact
+                            if (artifactName.includes('.png') || artifactName.includes('.jpg') || artifactName.includes('.jpeg') || artifactName.includes('.webp')) {
+                                try {
+                                    logger.info(`Fetching image artifact: ${artifactName} for user: ${userId}, session: ${sessionId}`);
+                                    const imageData = await this.artifactService.loadArtifactBySession('app', userId, sessionId, artifactName);
+                                    if (imageData && imageData.data) {
+                                        artifactImages.push({
+                                            mimeType: imageData.mimeType || 'image/png',
+                                            data: imageData.data
+                                        });
+                                        logger.info(`Successfully fetched image artifact: ${artifactName}`);
+                                    }
+                                } catch (error) {
+                                    logger.error(`Error fetching image artifact ${artifactName}:`, error);
+                                }
+                            }
+                        }
                     }
                 }
             }
+
+            // Combine inline images and artifact images
+            const allImages = [...imageParts, ...artifactImages];
             
-            if (responseText || imageParts.length > 0) {
-                logger.info(`ADK Final Response: Text=${responseText ? responseText.substring(0, 100) + '...' : 'none'} Images=${imageParts.length}`);
+            if (responseText || allImages.length > 0) {
+                logger.info(`ADK Final Response: Text=${responseText ? responseText.substring(0, 100) + '...' : 'none'} Images=${allImages.length}`);
                 return {
                     text: responseText || 'Here\'s your generated image:',
-                    images: imageParts
+                    images: allImages
                 };
             } else {
                 logger.warn('No valid response text or images found in ADK response');
@@ -1108,6 +1226,11 @@ class WhatsAppBot {
                 images: []
             };
         }
+    }
+
+    getUserIdFromJid(jid) {
+        // Extract userId from WhatsApp JID (e.g., "6592377976@s.whatsapp.net" -> "6592377976@s.whatsapp.net")
+        return jid;
     }
 
     parseADKResponse(data) {
