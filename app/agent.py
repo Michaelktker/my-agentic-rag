@@ -101,7 +101,7 @@ def retrieve_docs(query: str) -> str:
     return formatted_docs
 
 
-def list_user_artifacts(tool_context: ToolContext) -> str:
+async def list_user_artifacts(tool_context: ToolContext) -> str:
     """
     Lists all artifacts (media files) uploaded by the current user.
     Use this to see what files are available for analysis.
@@ -110,7 +110,7 @@ def list_user_artifacts(tool_context: ToolContext) -> str:
         str: A formatted list of available artifacts or an error message.
     """
     try:
-        available_files = tool_context.list_artifacts()
+        available_files = await tool_context.list_artifacts()
         if not available_files:
             return "You have no saved artifacts. Upload some media files to get started!"
         else:
@@ -122,7 +122,7 @@ def list_user_artifacts(tool_context: ToolContext) -> str:
         return f"An unexpected error occurred while listing artifacts: {e}"
 
 
-def load_and_analyze_artifact(filename: str, analysis_query: str, tool_context: ToolContext) -> str:
+async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_context: ToolContext) -> str:
     """
     Loads a specific artifact (media file) and provides analysis context.
     Use this when you need to analyze a specific file uploaded by the user.
@@ -136,7 +136,7 @@ def load_and_analyze_artifact(filename: str, analysis_query: str, tool_context: 
     """
     try:
         # Load the artifact
-        artifact_part = tool_context.load_artifact(filename)
+        artifact_part = await tool_context.load_artifact(filename)
         
         if not artifact_part:
             return f"Artifact '{filename}' not found. Use list_user_artifacts to see available files."
@@ -192,7 +192,7 @@ Note: The file content is available in the conversation context for direct analy
         return f"An unexpected error occurred while loading '{filename}': {e}"
 
 
-def save_analysis_result(filename: str, analysis_content: str, tool_context: ToolContext) -> str:
+async def save_analysis_result(filename: str, analysis_content: str, tool_context: ToolContext) -> str:
     """
     Saves an analysis result as a new artifact.
     Use this to save your analysis or generated content back to the user's artifacts.
@@ -209,7 +209,7 @@ def save_analysis_result(filename: str, analysis_content: str, tool_context: Too
         analysis_part = types.Part.from_text(text=analysis_content)
         
         # Save the artifact
-        version = tool_context.save_artifact(filename, analysis_part)
+        version = await tool_context.save_artifact(filename, analysis_part)
         
         return f"Successfully saved analysis result as '{filename}' (version {version}). The user can now access this analysis result through their WhatsApp bot."
         
