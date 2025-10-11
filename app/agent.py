@@ -265,11 +265,7 @@ async def generate_image(prompt: str, tool_context: ToolContext) -> str:
         # Create Part object for the image
         image_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
         
-        # Add the image directly to the conversation response
-        # This makes the image available in the ADK API response
-        await tool_context.add_to_conversation(image_part)
-        
-        # Also save as artifact for persistence
+        # Save as artifact - this makes it available for the agent's response
         version = await tool_context.save_artifact(filename, image_part)
         
         # Calculate file size
@@ -282,7 +278,7 @@ async def generate_image(prompt: str, tool_context: ToolContext) -> str:
 🖼️ Format: PNG (1024x1024)
 🎨 Model: Imagen 3.0
 
-The generated image is included in this response."""
+The image has been generated and saved as an artifact. You can now include this image in your response to the user by referencing the artifact '{filename}'."""
         
     except Exception as e:
         error_msg = str(e)
