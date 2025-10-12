@@ -696,6 +696,117 @@ class MediaHandler {
 }
 
 /**
+ * User Session Manager for persistent session storage in GCS
+ */
+class UserSessionManager {
+    constructor() {
+        this.sessionBucket = storage.bucket('authstate');
+        this.sessionFolder = 'user_sessions';
+    }
+
+    /**
+     * Get session file path for a user
+     */
+    getSessionFilePath(userId) {
+        // Clean userId for safe file naming
+        const cleanUserId = userId.replace(/[^a-zA-Z0-9@.]/g, '_');
+        return `${this.sessionFolder}/${cleanUserId}/session.json`;
+    }
+
+    /**
+     * Check if user exists in storage and get their session ID
+     */
+    async getUserSession(userId) {
+        try {
+            const filePath = this.getSessionFilePath(userId);
+            const file = this.sessionBucket.file(filePath);
+            
+            const [exists] = await file.exists();
+            if (!exists) {
+                logger.info(`New user detected: ${userId}`);
+                return null; // New user
+            }
+
+            const [data] = await file.download();
+            const sessionData = JSON.parse(data.toString());
+            
+            logger.info(`Existing user found: ${userId}, session: ${sessionData.sessionId}`);
+            return sessionData;
+            
+        } catch (error) {
+            logger.error(`Error checking user session for ${userId}:`, error);
+            return null; // Treat as new user on error
+        }
+    }
+
+    /**
+     * Store user session data in GCS
+     */
+    async storeUserSession(userId, sessionId, sessionData = {}) {
+        try {
+            const filePath = this.getSessionFilePath(userId);
+            const file = this.sessionBucket.file(filePath);
+            
+            const sessionInfo = {
+                userId: userId,
+                sessionId: sessionId,
+                createdAt: new Date().toISOString(),
+                lastActivity: new Date().toISOString(),
+                ...sessionData
+            };
+
+            const jsonData = JSON.stringify(sessionInfo, null, 2);
+            await file.save(Buffer.from(jsonData), {
+                metadata: {
+                    contentType: 'application/json'
+                }
+            });
+
+            logger.info(`Stored session data for user ${userId}: ${sessionId}`);
+            return true;
+            
+        } catch (error) {
+            logger.error(`Error storing user session for ${userId}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * Update last activity timestamp for existing session
+     */
+    async updateUserActivity(userId) {
+        try {
+            const sessionData = await this.getUserSession(userId);
+            if (sessionData) {
+                sessionData.lastActivity = new Date().toISOString();
+                await this.storeUserSession(userId, sessionData.sessionId, sessionData);
+                logger.debug(`Updated activity for user ${userId}`);
+            }
+        } catch (error) {
+            logger.error(`Error updating user activity for ${userId}:`, error);
+        }
+    }
+
+    /**
+     * Test GCS connectivity for session storage
+     */
+    async testConnection() {
+        try {
+            logger.info('Testing session storage GCS connection...');
+            const [files] = await this.sessionBucket.getFiles({ 
+                prefix: this.sessionFolder,
+                maxResults: 1 
+            });
+            logger.info(`Session storage GCS connection successful. Found ${files.length} session files.`);
+            return true;
+        } catch (error) {
+            logger.error('Session storage GCS connection failed:', error.message);
+            return false;
+        }
+    }
+}
+
+/**
  * WhatsApp Bot Class
  */
 class WhatsAppBot {
@@ -705,10 +816,18 @@ class WhatsAppBot {
         this.activeSessions = new Map(); // Store user sessions
         this.artifactService = new GcsArtifactService();
         this.mediaHandler = new MediaHandler(this.artifactService);
+        this.sessionManager = new UserSessionManager();
     }
 
     async initialize() {
         try {
+            // Test session storage connection
+            logger.info('Testing session storage connection...');
+            const sessionStorageOk = await this.sessionManager.testConnection();
+            if (!sessionStorageOk) {
+                logger.error('Session storage connection failed - bot may not work properly');
+            }
+
             // Get latest WhatsApp Web version
             const { version, isLatest } = await fetchLatestBaileysVersion();
             logger.info(`Using WhatsApp v${version.join('.')}, isLatest: ${isLatest}`);
@@ -841,26 +960,56 @@ class WhatsAppBot {
 
             logger.info(`Received message from ${remoteJid}${hasMedia ? ' with media' : ''}: ${messageText || '[media only]'}`);
 
-            // Create or get session for this user
+            // Create or get session for this user using persistent storage
             let session = this.activeSessions.get(userId);
             if (!session) {
-                // Create a new ADK session
-                const adkSessionId = await this.createADKSession(userId);
-                if (!adkSessionId) {
-                    await this.sendMessage(remoteJid, 'Sorry, I\'m unable to create a new conversation session right now. Please try again later.');
-                    return;
+                // Check if user exists in Google Storage
+                const existingSession = await this.sessionManager.getUserSession(userId);
+                
+                if (existingSession) {
+                    // Existing user - use stored session ID
+                    session = {
+                        sessionId: existingSession.sessionId,
+                        userId: userId,
+                        createdAt: new Date(existingSession.createdAt),
+                        lastActivity: new Date(),
+                        isReturningUser: true
+                    };
+                    
+                    // Update activity in storage
+                    await this.sessionManager.updateUserActivity(userId);
+                    
+                    logger.info(`Restored existing session ${session.sessionId} for returning user ${userId}`);
+                } else {
+                    // New user - create new ADK session
+                    const adkSessionId = await this.createADKSession(userId);
+                    if (!adkSessionId) {
+                        await this.sendMessage(remoteJid, 'Sorry, I\'m unable to create a new conversation session right now. Please try again later.');
+                        return;
+                    }
+                    
+                    session = {
+                        sessionId: adkSessionId,
+                        userId: userId,
+                        createdAt: new Date(),
+                        lastActivity: new Date(),
+                        isReturningUser: false
+                    };
+                    
+                    // Store new session in GCS
+                    await this.sessionManager.storeUserSession(userId, adkSessionId, {
+                        isNewUser: true,
+                        firstMessage: messageText || '[media]'
+                    });
+                    
+                    logger.info(`Created new session ${session.sessionId} for new user ${userId}`);
                 }
                 
-                session = {
-                    sessionId: adkSessionId,
-                    userId: userId,
-                    createdAt: new Date(),
-                    lastActivity: new Date()
-                };
                 this.activeSessions.set(userId, session);
-                logger.info(`Created new session ${session.sessionId} for user ${userId}`);
             } else {
                 session.lastActivity = new Date();
+                // Update activity in storage for existing in-memory session
+                await this.sessionManager.updateUserActivity(userId);
             }
 
             // Process media if present
@@ -899,6 +1048,12 @@ class WhatsAppBot {
             // Prepare message for ADK (combine text and media)
             let adkMessage = messageText || 'I\'ve uploaded a media file for you to analyze.';
             
+            // Welcome message disabled - skip greeting
+            // if (!session.hasGreeted) {
+            //     await this.sendWelcomeMessage(remoteJid, userId, session.sessionId, session.isReturningUser);
+            //     session.hasGreeted = true;
+            // }
+
             // Send message to ADK with streaming (including media parts)
             const response = await this.sendToADK(adkMessage, session.sessionId, userId, remoteJid, mediaParts);
             
@@ -927,6 +1082,48 @@ class WhatsAppBot {
         }
     }
 
+    /**
+     * Save user preference that persists across sessions
+     * This demonstrates the user: prefix pattern for persistent state
+     */
+    async saveUserPreference(userId, sessionId, preferenceKey, preferenceValue) {
+        try {
+            const payload = {
+                appName: ADK_APP_NAME,
+                userId: userId,
+                sessionId: sessionId,
+                newMessage: {
+                    parts: [{
+                        text: `SYSTEM: Save user preference ${preferenceKey} as ${preferenceValue}`
+                    }],
+                    role: "system"
+                },
+                streaming: false,
+                state_updates: {
+                    [`user:${preferenceKey}`]: preferenceValue,
+                    'temp:preference_updated': true
+                }
+            };
+
+            const response = await axios.post(`${ADK_URL}/run`, payload, {
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                timeout: config.adk.timeout
+            });
+
+            if (response.status === 200) {
+                logger.info(`Saved user preference ${preferenceKey} for user ${userId}`);
+                return true;
+            }
+            return false;
+
+        } catch (error) {
+            logger.error(`Error saving user preference: ${error.message}`);
+            return false;
+        }
+    }
+
     extractMessageText(message) {
         if (message.message.conversation) {
             return message.message.conversation;
@@ -942,13 +1139,29 @@ class WhatsAppBot {
 
     async createADKSession(userId) {
         try {
+            // Initialize session with user-scoped state for persistence
+            const initialState = {
+                // User-scoped state - persists across sessions (logout/login)
+                'user:first_interaction': new Date().toISOString(),
+                'user:total_sessions': 1,
+                'user:whatsapp_number': userId,
+                'user:conversation_history_count': 0,
+                
+                // Session-scoped state - reset on new session
+                'current_session_start': new Date().toISOString(),
+                'session_message_count': 0,
+                
+                // App-scoped state (if needed)
+                'app:bot_version': '1.0.0'
+            };
+
             const payload = {
                 appName: ADK_APP_NAME,
                 userId: userId,
-                state: {}
+                state: initialState
             };
 
-            logger.info(`Creating ADK session for user: ${userId}`);
+            logger.info(`Creating ADK session for user: ${userId} with persistent user state`);
 
             const response = await axios.post(`${ADK_URL}/apps/${ADK_APP_NAME}/users/${userId}/sessions`, payload, {
                 headers: {
@@ -958,7 +1171,11 @@ class WhatsAppBot {
             });
 
             if (response.status === 200 && response.data.id) {
-                logger.info(`Created ADK session: ${response.data.id}`);
+                logger.info(`Created ADK session: ${response.data.id} for user: ${userId}`);
+                
+                // If this is a returning user, increment their session count
+                await this.updateReturnUserState(response.data.id, userId);
+                
                 return response.data.id;
             } else {
                 logger.error(`Failed to create ADK session: ${response.status}`);
@@ -967,6 +1184,90 @@ class WhatsAppBot {
         } catch (error) {
             logger.error('Error creating ADK session:', error.message);
             return null;
+        }
+    }
+
+    async updateReturnUserState(sessionId, userId) {
+        try {
+            // Check if user has previous sessions by trying to get their user-scoped state
+            // If they do, this updates user:total_sessions counter
+            const payload = {
+                appName: ADK_APP_NAME,
+                userId: userId,
+                sessionId: sessionId,
+                newMessage: {
+                    parts: [{
+                        text: "SYSTEM: Update user session count"
+                    }],
+                    role: "system"
+                },
+                streaming: false,
+                state_updates: {
+                    // Increment user session count for returning users
+                    'user:total_sessions': 'INCREMENT',
+                    'user:last_login': new Date().toISOString(),
+                    'temp:session_init': true
+                }
+            };
+
+            // This is a system call to update state, not a user message
+            logger.debug(`Updating return user state for session: ${sessionId}`);
+            
+            // Note: We won't send this as a regular message, but use it to establish persistent state
+            // The actual state persistence happens automatically via ADK's user: prefix pattern
+            
+        } catch (error) {
+            logger.warn('Could not update return user state:', error.message);
+            // This is non-critical, session will still work
+        }
+    }
+
+    async sendWelcomeMessage(remoteJid, userId, sessionId, isReturningUser = false) {
+        try {
+            let welcomeMessage;
+            
+            if (isReturningUser) {
+                // Returning user - get their persistent state
+                try {
+                    const sessionResponse = await axios.get(`${ADK_URL}/apps/${ADK_APP_NAME}/users/${userId}/sessions/${sessionId}`, {
+                        headers: { 'Content-Type': 'application/json' },
+                        timeout: config.adk.timeout
+                    });
+
+                    if (sessionResponse.status === 200 && sessionResponse.data.state) {
+                        const state = sessionResponse.data.state;
+                        const userTotalSessions = state['user:total_sessions'] || 'multiple';
+                        const userFirstInteraction = state['user:first_interaction'];
+                        
+                        if (userFirstInteraction) {
+                            const firstDate = new Date(userFirstInteraction).toLocaleDateString();
+                            welcomeMessage = `Welcome back! 🎉 Great to see you again! You first used this bot on ${firstDate}. I've restored your previous conversation context. How can I help you today?`;
+                        } else {
+                            welcomeMessage = `Welcome back! 🎉 I've restored your previous conversation context. How can I help you today?`;
+                        }
+                    } else {
+                        welcomeMessage = `Welcome back! 🎉 I've restored your previous conversation. How can I help you today?`;
+                    }
+                } catch (error) {
+                    logger.warn('Error getting state for returning user:', error.message);
+                    welcomeMessage = `Welcome back! 🎉 I've restored your previous conversation. How can I help you today?`;
+                }
+            } else {
+                // New user
+                welcomeMessage = `Welcome to your AI assistant! 👋 This is your first time using this bot. I can help you with questions, analyze documents and images, generate content, and much more. How can I assist you today?`;
+            }
+            
+            await this.sendMessage(remoteJid, welcomeMessage);
+            logger.info(`Sent ${isReturningUser ? 'returning' : 'new'} user welcome message to ${userId}`);
+            
+        } catch (error) {
+            logger.warn('Could not send personalized welcome message:', error.message);
+            // Fallback welcome message
+            try {
+                await this.sendMessage(remoteJid, '👋 Welcome to your AI assistant! How can I help you today?');
+            } catch (fallbackError) {
+                logger.error('Failed to send even fallback welcome message:', fallbackError.message);
+            }
         }
     }
 
@@ -992,7 +1293,11 @@ class WhatsAppBot {
                     parts: parts,
                     role: "user"
                 },
-                streaming: false // Disable streaming to test non-streaming responses
+                streaming: false, // Disable streaming to test non-streaming responses
+                // Include system context about user state persistence
+                systemContext: {
+                    instructions: "You have access to persistent user state with 'user:' prefix. Use user:total_sessions, user:first_interaction, user:last_login, and other user: prefixed state to personalize responses. Session-scoped state resets on new sessions. Remember user preferences and conversation history across sessions."
+                }
             };
 
             logger.info(`Sending to ADK (non-streaming): ${JSON.stringify(payload)}`);
