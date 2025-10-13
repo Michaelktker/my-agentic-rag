@@ -178,19 +178,20 @@ class GcsArtifactService {
     }
 
     /**
-     * Generate artifact path: artifacts/{appName}/{userId}/{filename}
-     * Note: Scoped by userId (not sessionId) as requested
+     * Generate artifact path: {appName}/{userId}/{sessionId}/{filename}
+     * This matches ADK Runner's expected path structure for cross-compatibility
      */
-    getArtifactPath(appName, userId, filename) {
-        return `${this.artifactsFolder}/${appName}/${userId}/${filename}`;
+    getArtifactPath(appName, userId, filename, sessionId = 'shared') {
+        // Use ADK-compatible path: app/userId/sessionId/filename
+        return `${appName}/${userId}/${sessionId}/${filename}`;
     }
 
     /**
      * Save artifact to GCS and return version number
      */
-    async saveArtifact(appName, userId, filename, part) {
+    async saveArtifact(appName, userId, filename, part, sessionId = 'shared') {
         try {
-            const artifactPath = this.getArtifactPath(appName, userId, filename);
+            const artifactPath = this.getArtifactPath(appName, userId, filename, sessionId);
             
             // Convert Part object to storage format
             const artifactData = {
@@ -201,7 +202,7 @@ class GcsArtifactService {
             };
 
             // Get existing versions to determine next version number
-            const versions = await this.listVersions(appName, userId, filename);
+            const versions = await this.listVersions(appName, userId, filename, sessionId);
             const nextVersion = versions.length > 0 ? Math.max(...versions) + 1 : 1;
             
             const versionedPath = `${artifactPath}/v${nextVersion}`;
@@ -232,14 +233,14 @@ class GcsArtifactService {
     /**
      * Load artifact from GCS (latest version if no version specified)
      */
-    async loadArtifact(appName, userId, filename, version = null) {
+    async loadArtifact(appName, userId, filename, version = null, sessionId = 'shared') {
         try {
-            const artifactPath = this.getArtifactPath(appName, userId, filename);
+            const artifactPath = this.getArtifactPath(appName, userId, filename, sessionId);
             
             let targetVersion = version;
             if (!targetVersion) {
                 // Get latest version
-                const versions = await this.listVersions(appName, userId, filename);
+                const versions = await this.listVersions(appName, userId, filename, sessionId);
                 if (versions.length === 0) {
                     return null;
                 }
@@ -371,9 +372,9 @@ class GcsArtifactService {
     /**
      * List all versions for an artifact
      */
-    async listVersions(appName, userId, filename) {
+    async listVersions(appName, userId, filename, sessionId = 'shared') {
         try {
-            const artifactPath = this.getArtifactPath(appName, userId, filename);
+            const artifactPath = this.getArtifactPath(appName, userId, filename, sessionId);
             const [files] = await this.bucket.getFiles({
                 prefix: `${artifactPath}/v`
             });
@@ -540,7 +541,7 @@ class MediaHandler {
     /**
      * Process media message and convert to ADK Part format
      */
-    async processMediaMessage(message, userId) {
+    async processMediaMessage(message, userId, sessionId = 'shared') {
         try {
             // Download media from WhatsApp
             const buffer = await downloadMediaMessage(message, 'buffer', {});
@@ -585,7 +586,8 @@ class MediaHandler {
                     ADK_APP_NAME,
                     userId,
                     filename.replace('.xlsx', '.txt'), // Change extension to .txt
-                    part
+                    part,
+                    sessionId
                 );
 
                 logger.info(`Processed XLSX file as text: ${filename} -> ${filename.replace('.xlsx', '.txt')} (text/plain) v${version} for user ${userId}`);
@@ -621,7 +623,8 @@ class MediaHandler {
                     ADK_APP_NAME,
                     userId,
                     filename.replace('.docx', '.txt'), // Change extension to .txt
-                    part
+                    part,
+                    sessionId
                 );
 
                 logger.info(`Processed DOCX file as text: ${filename} -> ${filename.replace('.docx', '.txt')} (text/plain) v${version} for user ${userId}`);
@@ -651,7 +654,8 @@ class MediaHandler {
                 ADK_APP_NAME,
                 userId,
                 filename,
-                part
+                part,
+                sessionId
             );
 
             logger.info(`Processed media file: ${filename} (${mimeType}) v${version} for user ${userId}`);
@@ -1016,7 +1020,7 @@ class WhatsAppBot {
             let mediaParts = [];
             if (hasMedia) {
                 try {
-                    const mediaResult = await this.mediaHandler.processMediaMessage(message, userId);
+                    const mediaResult = await this.mediaHandler.processMediaMessage(message, userId, session.sessionId);
                     
                     // Create Part object for ADK (use base64 data)
                     mediaParts.push({
