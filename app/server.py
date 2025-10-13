@@ -49,28 +49,29 @@ provider.add_span_processor(processor)
 trace.set_tracer_provider(provider)
 
 AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Agent Engine session configuration
+# Agent Engine session configuration - commented out for dev testing
 # Use environment variable for agent name, default to project name
-agent_name = os.environ.get("AGENT_ENGINE_SESSION_NAME", "my-agentic-rag")
+# agent_name = os.environ.get("AGENT_ENGINE_SESSION_NAME", "my-agentic-rag")
 
 # Check if an agent with this name already exists
-existing_agents = list(agent_engines.list(filter=f"display_name={agent_name}"))
+# existing_agents = list(agent_engines.list(filter=f"display_name={agent_name}"))
 
-if existing_agents:
-    # Use the existing agent
-    agent_engine = existing_agents[0]
-else:
-    # Create a new agent if none exists
-    agent_engine = agent_engines.create(display_name=agent_name)
+# if existing_agents:
+#     # Use the existing agent
+#     agent_engine = existing_agents[0]
+# else:
+#     # Create a new agent if none exists
+#     agent_engine = agent_engines.create(display_name=agent_name)
 
-session_service_uri = f"agentengine://{agent_engine.resource_name}"
+# Use in-memory session service for dev/testing
+# session_service_uri = f"agentengine://{agent_engine.resource_name}"
 
 app: FastAPI = get_fast_api_app(
     agents_dir=AGENT_DIR,
     web=True,
     artifact_service_uri=artifacts_bucket_uri,
     allow_origins=allow_origins,
-    session_service_uri=session_service_uri,
+    # session_service_uri=session_service_uri,  # Comment out for dev testing
 )
 app.title = "my-agentic-rag"
 app.description = "API for interacting with the Agent my-agentic-rag"

@@ -25,7 +25,6 @@ from google.adk.agents import Agent
 from google.adk.tools.mcp_tool import MCPToolset, StreamableHTTPConnectionParams
 from google.adk.tools import google_search
 from google.adk.tools.agent_tool import AgentTool
-from google.adk.artifacts import GcsArtifactService
 from google.adk.tools import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
@@ -74,9 +73,8 @@ compressor = get_compressor(
     project_id=project_id,
 )
 
-# Initialize GcsArtifactService for handling media files from WhatsApp
-artifacts_bucket = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
-artifact_service = GcsArtifactService(bucket_name=artifacts_bucket)
+# The artifact service is handled by the Runner created in get_fast_api_app
+# Functions will use tool_context to access artifacts configured at Runner level
 
 
 def retrieve_docs(query: str) -> str:
