@@ -87,7 +87,6 @@ We've resolved critical architectural issues that were preventing proper artifac
 1. **WhatsApp Bot** (`index.js`)
    - Baileys v6.7.8 for WhatsApp Web API
    - Google Cloud Storage auth state management
-   - ADK streaming integration with Server-Sent Events
    - Full media file processing (images, audio, video, documents)
    - Office document conversion (XLSX → CSV, DOCX → text) for Gemini compatibility
    - User session management with automatic cleanup
@@ -98,7 +97,6 @@ We've resolved critical architectural issues that were preventing proper artifac
    - Multimodal capabilities for media analysis
    - GitHub MCP tools integration
    - Vertex AI Search for document retrieval
-   - Streaming responses for real-time interaction
    - Three artifact management tools using unified Runner-level service
 
 3. **Artifact Management System**
