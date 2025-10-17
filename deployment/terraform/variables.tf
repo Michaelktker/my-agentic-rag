@@ -158,6 +158,13 @@ variable "github_pat_token" {
   sensitive   = true
 }
 
+variable "fal_api_key" {
+  description = "fal.ai API key for image/video generation MCP integration"
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
 variable "create_cb_connection" {
   description = "Flag indicating if a Cloud Build connection already exists"
   type        = bool

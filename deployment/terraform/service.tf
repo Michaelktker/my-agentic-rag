@@ -61,6 +61,16 @@ resource "google_cloud_run_v2_service" "app_staging" {
           }
         }
       }
+
+      env {
+        name = "FAL_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.fal_api_key["staging"].secret_id
+            version = "latest"
+          }
+        }
+      }
     }
 
     service_account                = google_service_account.app_sa["staging"].email
@@ -129,6 +139,16 @@ resource "google_cloud_run_v2_service" "app_prod" {
         value_source {
           secret_key_ref {
             secret  = google_secret_manager_secret.github_pat_mcp["prod"].secret_id
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name = "FAL_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.fal_api_key["prod"].secret_id
             version = "latest"
           }
         }

@@ -8,3 +8,6 @@ dev_project_id = "production-adk"
 region = "us-central1"
 # The value can only be one of "global", "us" and "eu".
 data_store_region = "us"
+
+# fal.ai API key for image/video generation (set during deployment)
+# fal_api_key = "your-fal-api-key-here"

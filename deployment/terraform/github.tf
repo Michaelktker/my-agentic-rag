@@ -76,6 +76,33 @@ resource "google_secret_manager_secret_version" "github_pat_mcp" {
   secret_data = var.github_pat_token
 }
 
+# Create FAL API key secret for fal.ai MCP integration
+resource "google_secret_manager_secret" "fal_api_key" {
+  for_each = local.deploy_project_ids
+  
+  project   = each.value
+  secret_id = "fal-api-key"
+  
+  replication {
+    auto {}
+  }
+  
+  labels = {
+    created-by = "adk"
+    purpose    = "fal-ai-mcp-integration"
+  }
+  
+  depends_on = [google_project_service.deploy_project_services]
+}
+
+# Create FAL API key secret version
+resource "google_secret_manager_secret_version" "fal_api_key" {
+  for_each = local.deploy_project_ids
+  
+  secret      = google_secret_manager_secret.fal_api_key[each.key].id
+  secret_data = var.fal_api_key
+}
+
 # Create the GitHub connection (fallback for manual Terraform usage)
 resource "google_cloudbuildv2_connection" "github_connection" {
   count      = var.create_cb_connection ? 0 : 1

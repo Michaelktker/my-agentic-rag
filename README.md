@@ -52,6 +52,7 @@ A production-ready system that combines:
 - 🛠️ **Architecture Fix**: Resolved duplicate artifact service instantiation issues
 - 🗂️ **Path Compatibility**: Fixed path structure mismatch between WhatsApp bot and ADK Runner
 - ✅ **Production Stability**: Comprehensive debugging and error handling improvements
+- 🐳 **Deployment Ready**: Fixed Docker configuration, MCP paths, and environment variables for production deployment
 
 ## 🏗️ Architecture
 
@@ -87,6 +88,29 @@ We've resolved critical architectural issues that were preventing proper artifac
 #### ✅ **Session-Aware Artifact Management**
 - **Enhancement**: All artifact operations now include session ID for proper scoping
 - **Benefits**: Better user isolation, proper session management, and cleaner artifact organization
+
+### October 2025 Deployment Fixes
+We've resolved critical deployment issues that were preventing production deployment:
+
+#### ✅ **Docker Configuration Fixed**
+- **Problem**: MCP-FAL dependencies and files were missing from the Docker image
+- **Solution**: Updated `Dockerfile` to include `mcp-fal/` directory and install dependencies
+- **Impact**: MCP server can now run properly in production containers
+
+#### ✅ **Production Path Configuration**
+- **Problem**: Agent used hardcoded development paths (`/workspaces/my-agentic-rag/`)
+- **Solution**: Updated agent.py to use container paths (`/code/`)
+- **Impact**: MCP server paths work correctly in production environment
+
+#### ✅ **Environment Variable Management**
+- **Problem**: FAL_KEY was missing from Cloud Run service configuration
+- **Solution**: Added FAL_KEY secret to Terraform and Cloud Run environment
+- **Impact**: fal.ai MCP integration now works in deployed environments
+
+#### ✅ **Secret Management Architecture**
+- **Enhancement**: Comprehensive secret management for both GitHub PAT and FAL API key
+- **Benefits**: Secure API key storage with proper IAM permissions
+- **Components**: Terraform-managed secrets with version control
 
 ### Core Components
 
@@ -491,6 +515,29 @@ docker run -p 3000:3000 whatsapp-adk-bot
 docker build -f Dockerfile -t adk-server .
 docker run -p 8000:8000 adk-server
 ```
+
+### Deployment Verification
+
+After deployment, verify all components are working:
+
+```bash
+# Check service health
+curl https://your-service-url/health
+
+# Verify MCP-FAL integration in logs
+gcloud run services logs read my-agentic-rag \
+  --region=us-central1 --project=YOUR_PROJECT_ID \
+  | grep -E "(fal|MCP|Application startup complete)"
+
+# Test fal.ai capabilities via API
+curl -X POST https://your-service-url/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "List available fal.ai models"}'
+```
+
+**Required Secrets for Deployment**:
+- `github-pat-mcp`: GitHub Personal Access Token with repo access
+- `fal-api-key`: fal.ai API key from https://fal.ai/dashboard
 
 ## 📱 Usage Examples
 

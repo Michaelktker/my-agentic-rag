@@ -140,3 +140,33 @@ resource "google_secret_manager_secret_iam_member" "github_pat_mcp_cicd_access" 
     google_service_account.cicd_runner_sa
   ]
 }
+
+# Grant Cloud Run service accounts access to FAL API key secret
+resource "google_secret_manager_secret_iam_member" "fal_api_key_access" {
+  for_each = local.deploy_project_ids
+
+  project   = each.value
+  secret_id = google_secret_manager_secret.fal_api_key[each.key].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.app_sa[each.key].email}"
+  
+  depends_on = [
+    google_secret_manager_secret.fal_api_key,
+    google_service_account.app_sa
+  ]
+}
+
+# Grant CI/CD service account access to FAL API key secret for builds
+resource "google_secret_manager_secret_iam_member" "fal_api_key_cicd_access" {
+  for_each = local.deploy_project_ids
+
+  project   = each.value
+  secret_id = google_secret_manager_secret.fal_api_key[each.key].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cicd_runner_sa.email}"
+  
+  depends_on = [
+    google_secret_manager_secret.fal_api_key,
+    google_service_account.cicd_runner_sa
+  ]
+}

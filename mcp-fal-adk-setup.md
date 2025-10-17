@@ -58,6 +58,17 @@ python main.py
 
 > Running with `python main.py` will launch the server ready for the ADK agent to connect over **stdio**.
 
+**Note:** If you encounter a `TypeError` about unexpected keyword arguments, ensure your `main.py` uses the correct FastMCP initialization:
+
+```python
+mcp = FastMCP(
+    name=SERVER_NAME,
+    instructions=SERVER_DESCRIPTION,
+    version=SERVER_VERSION,
+    dependencies=SERVER_DEPENDENCIES
+)
+```
+
 ---
 
 ## 🧠 5. Configure Google ADK Agent to Use MCP as an AgentTool
@@ -137,10 +148,12 @@ Once connected, try prompting the root agent:
 
 | Issue | Resolution |
 |-------|-------------|
+| **FastMCP TypeError** | If you get `TypeError: FastMCP.__init__() got an unexpected keyword argument 'description'`, update `main.py` to use `name=SERVER_NAME, instructions=SERVER_DESCRIPTION` instead of positional arguments. |
 | **Unauthorized / 401** | Ensure `FAL_KEY` is valid and has `API` scope. |
 | **No tools listed** | Confirm the ADK toolset is launched with correct `command="python" args=["main.py"]`. |
 | **Long job duration** | Use `queue=True` and poll using `status()` → `result()`. |
 | **Schema mismatch** | Always call `schema(model_id)` before `generate()` to confirm parameter fields. |
+| **Dependencies Warning** | The `dependencies` parameter is deprecated in FastMCP 2.11.4+. This warning can be ignored or migrate to `fastmcp.json` config file. |
 
 ---
 
@@ -163,13 +176,62 @@ my_adk_project/
 
 ## ✅ 9. Final Checklist
 
-- [ ] Clone and set up `mcp-fal`.  
-- [ ] Install dependencies (`fastmcp`, `httpx`, `aiofiles`).  
-- [ ] Set `FAL_KEY`.  
-- [ ] Run `python main.py` locally to verify tools list.  
-- [ ] Define and register `MCPToolset` in ADK code.  
-- [ ] Wrap the toolset in `AgentTool` and add it to your root agent.  
-- [ ] Test by prompting the ADK root agent to list or generate using fal.ai models.
+- [x] Clone and set up `mcp-fal`.  
+- [x] Install dependencies (`fastmcp`, `httpx`, `aiofiles`).  
+- [x] Set `FAL_KEY`.  
+- [x] Fix FastMCP initialization if needed (use `name=` and `instructions=` parameters).
+- [x] Run `python main.py` locally to verify tools list.  
+- [x] Define and register `MCPToolset` in ADK code.  
+- [x] Wrap the toolset in `AgentTool` and add it to your root agent.  
+- [x] Test by prompting the ADK root agent to list or generate using fal.ai models.
+- [x] **Production Deployment**: Configure Docker, paths, and environment variables for cloud deployment.
+
+---
+
+## 🚀 Production Deployment Configuration
+
+### Docker Configuration
+The production deployment requires proper Docker configuration to include MCP-FAL dependencies:
+
+```dockerfile
+# Dockerfile updates for MCP-FAL integration
+COPY ./mcp-fal ./mcp-fal
+
+# Install MCP-FAL dependencies
+RUN cd mcp-fal && python -m venv .venv && \
+    .venv/bin/pip install fastmcp httpx aiofiles
+```
+
+### Production Paths
+Update agent.py to use container paths instead of development paths:
+
+```python
+# Production-ready MCP configuration
+fal_mcp_tools = MCPToolset(
+    connection_params=StdioConnectionParams(
+        server_params=StdioServerParameters(
+            command="/code/mcp-fal/.venv/bin/python",  # Container path
+            args=["/code/mcp-fal/main.py"],           # Container path
+            env={"FAL_KEY": os.getenv("FAL_KEY", "")}
+        )
+    )
+)
+```
+
+### Environment Variables
+Ensure FAL_KEY is available in production via Secret Manager:
+
+```bash
+# Create production secret
+gcloud secrets create fal-api-key \
+  --project=production-adk \
+  --data-file=-  # Enter your fal.ai API key
+```
+
+The Terraform configuration automatically handles:
+- Secret creation and IAM permissions
+- Cloud Run environment variable injection
+- Proper service account access
 
 ---
 
@@ -183,4 +245,5 @@ my_adk_project/
 ---
 
 **Author:** Google ADK x fal.ai Integration Setup  
-**Last Updated:** 2025-10-17
+**Last Updated:** 2025-10-17  
+**Status:** ✅ Verified Working - FastMCP initialization fix applied

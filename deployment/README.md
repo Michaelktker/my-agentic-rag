@@ -87,18 +87,28 @@ terraform apply -var-file=vars/env.tfvars
 
 ### GitHub Token Setup
 
-After infrastructure deployment, configure the GitHub token in Secret Manager:
+After infrastructure deployment, configure the GitHub token and FAL API key in Secret Manager:
 
 ```bash
-# Create secret in staging
-gcloud secrets create github-personal-access-token \
+# Create GitHub PAT secret in staging
+gcloud secrets create github-pat-mcp \
   --project=staging-adk \
   --data-file=-  # Enter token when prompted
 
-# Create secret in production  
-gcloud secrets create github-personal-access-token \
+# Create GitHub PAT secret in production  
+gcloud secrets create github-pat-mcp \
   --project=production-adk \
   --data-file=-  # Enter token when prompted
+
+# Create FAL API key secret in staging
+gcloud secrets create fal-api-key \
+  --project=staging-adk \
+  --data-file=-  # Enter FAL API key when prompted
+
+# Create FAL API key secret in production
+gcloud secrets create fal-api-key \
+  --project=production-adk \
+  --data-file=-  # Enter FAL API key when prompted
 ```
 
 ## 🔄 CI/CD Pipeline
@@ -149,15 +159,16 @@ gcloud builds triggers run deploy-my-agentic-rag \
 
 - **Cloud Run Service Account**: `{project-id}-compute@developer.gserviceaccount.com`
 - **Required Roles**:
-  - `secretmanager.secretAccessor`: Access GitHub tokens
+  - `secretmanager.secretAccessor`: Access GitHub tokens and FAL API key
   - `aiplatform.user`: Vertex AI Search access
   - `logging.logWriter`: Application logging
 
 ### Secret Management
 
-GitHub tokens are stored securely in Google Secret Manager:
+Secrets are stored securely in Google Secret Manager:
 
-- **Secret Name**: `github-personal-access-token`
+- **GitHub PAT**: `github-pat-mcp`
+- **FAL API Key**: `fal-api-key`
 - **Access**: Limited to Cloud Run service accounts
 - **Rotation**: Manual process (update secret versions)
 
@@ -166,6 +177,12 @@ GitHub tokens are stored securely in Google Secret Manager:
 - `repo`: Full repository access
 - `read:org`: Organization member access
 - `read:user`: User profile access
+
+### Required FAL API Key
+
+- **Source**: Generate from [https://fal.ai/dashboard](https://fal.ai/dashboard)
+- **Scope**: API access for image/video generation models
+- **Format**: `{key_id}:{secret}` (e.g., `14fcfa4a-1f68-4e1f-ac71-75088668eeac:ab3d5f08a5f11e46b820aa729748027e`)
 
 ## 🌐 Service URLs
 

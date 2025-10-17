@@ -9,3 +9,4 @@ create_cb_connection = true
 create_repository = false
 github_app_installation_id = "54681073"
 github_pat_secret_id = "git-my-agentic-rag-github-oauthtoken-ddff64"
+# fal_api_key = "your-fal-api-key-here"  # Uncomment and set during deployment

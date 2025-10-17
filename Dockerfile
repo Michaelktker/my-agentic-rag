@@ -21,8 +21,14 @@ WORKDIR /code
 COPY ./pyproject.toml ./README.md ./uv.lock* ./
 
 COPY ./app ./app
+COPY ./mcp-fal ./mcp-fal
 
+# Install main dependencies
 RUN uv sync --frozen
+
+# Install MCP-FAL dependencies
+RUN cd mcp-fal && python -m venv .venv && \
+    .venv/bin/pip install fastmcp httpx aiofiles
 
 ARG COMMIT_SHA=""
 ENV COMMIT_SHA=${COMMIT_SHA}

@@ -45,6 +45,11 @@ GITHUB_OWNER = "Michaelktker"
 GITHUB_REPO = "my-agentic-rag"
 
 credentials, project_id = google.auth.default()
+
+# Handle case where project_id might be None (e.g., in development environments)
+if project_id is None:
+    project_id = "production-adk"  # Use the configured project ID
+    
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", project_id)
 os.environ.setdefault("GOOGLE_CLOUD_LOCATION", LLM_LOCATION)
 os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "True")
@@ -468,8 +473,8 @@ mcp_tools = MCPToolset(
 fal_mcp_tools = MCPToolset(
     connection_params=StdioConnectionParams(
         server_params=StdioServerParameters(
-            command="/workspaces/my-agentic-rag/mcp-fal/.venv/bin/python",
-            args=["/workspaces/my-agentic-rag/mcp-fal/main.py"],
+            command="/code/mcp-fal/.venv/bin/python",
+            args=["/code/mcp-fal/main.py"],
             env={"FAL_KEY": os.getenv("FAL_KEY", "")}
         )
     )
