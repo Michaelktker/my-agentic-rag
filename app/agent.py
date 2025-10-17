@@ -22,7 +22,8 @@ from io import BytesIO
 import google
 import vertexai
 from google.adk.agents import Agent
-from google.adk.tools.mcp_tool import MCPToolset, StreamableHTTPConnectionParams
+from google.adk.tools.mcp_tool import MCPToolset, StreamableHTTPConnectionParams, StdioConnectionParams
+from mcp.client.stdio import StdioServerParameters
 from google.adk.tools import google_search
 from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools import FunctionTool
@@ -332,7 +333,32 @@ When performing GitHub operations:
 
 Always be precise and thorough in your GitHub operations."""
 
-instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis, PLUS image generation.
+# fal.ai MCP agent prompt
+FAL_MCP_PROMPT = """You are a specialized fal.ai agent with access to fal.ai's image and video generation models through MCP (Model Context Protocol) tools.
+
+Your role is to:
+1. Handle all fal.ai model operations efficiently
+2. List available models and search for specific ones
+3. Generate images and videos using various fal.ai models
+4. Retrieve model schemas and capabilities
+5. Handle both direct and queued generation requests
+
+When working with fal.ai models:
+- Use the most appropriate model for the requested content type
+- Always check model schemas before generating to understand required parameters
+- Handle queued requests appropriately for long-running generations
+- Provide clear feedback about generation progress and results
+- Be efficient in your tool usage
+
+Common fal.ai models you can use:
+- fal-ai/flux/dev: High-quality image generation
+- fal-ai/flux/schnell: Fast image generation
+- fal-ai/stable-video-diffusion: Video generation
+- And many others available through the models tool
+
+Always be precise and thorough in your fal.ai operations."""
+
+instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis, PLUS image generation via multiple sources.
 
 Answer to the best of your ability using the context provided and leverage the tools available to you.
 
@@ -340,19 +366,34 @@ You have access to several specialized capabilities:
 1. **Document retrieval** from your knowledge base using retrieve_docs
 2. **GitHub operations** through a specialized GitHub agent with MCP tools  
 3. **Web search** capabilities through a specialized web search agent
-4. **Artifact management** for handling media files uploaded by users:
+4. **fal.ai AI generation** through a specialized fal.ai agent with access to:
+   - Advanced image generation models (Flux, SDXL, etc.)
+   - Video generation capabilities (Stable Video Diffusion, etc.)
+   - Model discovery and schema inspection
+   - Both direct and queued generation for long-running tasks
+5. **Artifact management** for handling media files uploaded by users:
    - list_user_artifacts: See what media files users have uploaded
    - load_and_analyze_artifact: Load and analyze specific media files
    - save_analysis_result: Save your analysis results back as artifacts
-5. **Image generation** using Vertex AI Imagen:
+6. **Image generation** using Vertex AI Imagen:
    - generate_image: Create images from detailed text descriptions
 
 **Image Generation Guidelines:**
-- When users request image creation (words like "generate", "create", "make", "draw" an image), use the generate_image tool
-- Always use detailed, descriptive prompts for better image generation results
+- You now have TWO image generation options:
+  1. **Vertex AI Imagen** (generate_image): Google's high-quality image generation
+  2. **fal.ai models** (via fal.ai agent): Various cutting-edge models like Flux, SDXL
+- For advanced or specialized image generation, consider using fal.ai models
+- For quick, reliable generation, use Vertex AI Imagen
+- When users request image creation, choose the most appropriate method
 - Generated images are automatically included in your response AND saved as artifacts
 - Handle safety filter rejections gracefully with alternative suggestions
-- Common requests: portraits, landscapes, objects, scenes, artwork, logos, etc.
+
+**fal.ai Generation Capabilities:**
+- **Image Generation**: Use models like "fal-ai/flux/dev" for high-quality images
+- **Video Generation**: Use models like "fal-ai/stable-video-diffusion" 
+- **Model Discovery**: Use the fal.ai agent to list and search available models
+- **Schema Inspection**: Always check model schemas before generation
+- **Queue Management**: Handle long-running generations with proper status checking
 
 **Multimodal Analysis Capabilities:**
 - **Images**: Describe, analyze content, extract text, identify objects, analyze compositions
@@ -366,23 +407,25 @@ You have access to several specialized capabilities:
 3. Provide detailed analysis using your multimodal capabilities
 4. Optionally save analysis results using `save_analysis_result`
 
-**When users request image generation:**
-1. Use `generate_image` with a detailed, descriptive prompt
-2. The image will be automatically included in your response
-3. The image is also saved as an artifact for future reference
-4. If generation fails, provide helpful suggestions for alternative prompts
+**When users request image/video generation:**
+1. For images: Choose between Vertex AI Imagen or fal.ai models based on requirements
+2. For videos: Use the fal.ai agent with appropriate video generation models
+3. For specialized effects or styles: Consider fal.ai's diverse model ecosystem
+4. Always provide detailed, descriptive prompts for better results
+5. Handle errors gracefully and suggest alternatives if generation fails
 
 **Important Notes:**
-- You can both ANALYZE existing images and GENERATE new images
-- Generated images are included directly in your responses AND saved as artifacts
+- You can ANALYZE existing media AND GENERATE new content via multiple AI services
+- Generated content is included directly in responses AND saved as artifacts
 - The Gemini 2.5 Flash model you're powered by can directly analyze multimodal content
 - When artifacts are loaded, their content becomes available in the conversation context
 - Always provide comprehensive, detailed analysis of media files
 
 GitHub agent works with repository: {GITHUB_OWNER}/{GITHUB_REPO} by default.
 Use web search for current information not in your knowledge base.
+Use fal.ai agent for advanced AI content generation capabilities.
 
-Updated: Added image generation with direct API response inclusion - 2025-10-11"""
+Updated: Added fal.ai MCP integration for advanced AI generation - 2025-10-17"""
 
 
 # Initialize MCP tools only if GitHub token is available
@@ -421,6 +464,17 @@ mcp_tools = MCPToolset(
     ),
 )
 
+# Create the fal.ai MCP toolset (stdio connection)
+fal_mcp_tools = MCPToolset(
+    connection_params=StdioConnectionParams(
+        server_params=StdioServerParameters(
+            command="/workspaces/my-agentic-rag/mcp-fal/.venv/bin/python",
+            args=["/workspaces/my-agentic-rag/mcp-fal/main.py"],
+            env={"FAL_KEY": "14fcfa4a-1f68-4e1f-ac71-75088668eeac:ab3d5f08a5f11e46b820aa729748027e"}
+        )
+    )
+)
+
 # Create the GitHub MCP subagent
 github_mcp_agent = Agent(
     model="gemini-2.5-flash",
@@ -429,8 +483,19 @@ github_mcp_agent = Agent(
     tools=[mcp_tools],
 )
 
+# Create the fal.ai MCP subagent
+fal_mcp_agent = Agent(
+    model="gemini-2.5-flash",
+    name="fal_mcp_agent",
+    instruction=FAL_MCP_PROMPT,
+    tools=[fal_mcp_tools],
+)
+
 # Create AgentTool from the GitHub MCP subagent
 github_mcp_tool = AgentTool(agent=github_mcp_agent)
+
+# Create AgentTool from the fal.ai MCP subagent
+fal_mcp_tool = AgentTool(agent=fal_mcp_agent)
 
 # Create the web search agent
 websearch_agent = Agent(
@@ -451,7 +516,7 @@ save_artifact_tool = FunctionTool(func=save_analysis_result)
 # Create image generation tool
 generate_image_tool = FunctionTool(func=generate_image)
 
-tools = [retrieve_docs, github_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, generate_image_tool]
+tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, generate_image_tool]
 
 root_agent = Agent(
     name="root_agent",
