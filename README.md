@@ -161,6 +161,11 @@ We've resolved critical architectural issues that were preventing proper artifac
    # Copy and configure environment variables
    cp config/staging.env .env
    # Edit .env with your specific settings
+   
+   # For fal.ai MCP integration, also set:
+   cp .env.example .env
+   # Add your FAL API key to .env:
+   # FAL_KEY=your_fal_api_key_here
    ```
 
 3. **Google Cloud Configuration**:

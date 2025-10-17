@@ -78,7 +78,7 @@ fal_mcp_toolset = MCPToolset(
     transport="stdio",
     command="python",
     args=["main.py"],
-    env={"FAL_KEY": "14fcfa4a-1f68-4e1f-ac71-75088668eeac:ab3d5f08a5f11e46b820aa729748027e"}
+    env={"FAL_KEY": "YOUR_FAL_API_KEY_HERE"}
 )
 ```
 
