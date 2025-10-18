@@ -44,6 +44,9 @@ A production-ready system that combines:
 **Latest Updates (October 2025)**:
 - 🎨 **Image Generation**: End-to-end image creation using Imagen 3.0 with direct WhatsApp delivery
 - 🚀 **fal.ai MCP Integration**: Successfully integrated 100+ AI models via Model Context Protocol with proper ADK agent architecture
+- 🔧 **fal.ai Artifact Upload**: Fixed critical artifact-to-URL conversion for fal.ai processing with automatic version handling
+- 🔐 **Secret Manager Integration**: Automatic FAL_KEY retrieval from Google Secret Manager for seamless production deployment
+- 🗂️ **Artifact Version Fix**: Resolved "invalid literal for int() with base 10: 'v1'" error with intelligent filename processing
 - 🔧 **MCP Architecture**: Resolved `MCPToolset` stdio configuration with `StdioConnectionParams` and `StdioServerParameters`
 - 🧠 **Advanced AI Models**: Access to FLUX, video generation, upscaling, and style transfer through fal.ai
 - 🔧 **Artifact System**: Completely fixed GCS artifact loading with architectural improvements
@@ -319,6 +322,100 @@ Through the MCP integration, the ADK agent now has access to:
 - 🔍 **Upscaling**: AI-powered image enhancement and super-resolution
 - 🎭 **Style Transfer**: Artistic style application and transformation
 - 🖼️ **Image Editing**: Inpainting, outpainting, and image manipulation
+
+#### ✅ **fal.ai Artifact Upload Integration (October 2025)**
+
+**Critical Fix for Artifact-to-URL Conversion** (Latest Update):
+
+We've successfully resolved multiple blocking issues preventing WhatsApp users from uploading artifacts to fal.ai for advanced image processing:
+
+**The Problems**:
+- Users could upload images to WhatsApp → ADK artifact system ✅
+- But artifacts couldn't be converted to fal.ai URLs for processing ❌
+- Error: `"invalid literal for int() with base 10: 'v1'"` when calling `upload_artifact_to_fal`
+- Missing ADK package dependencies in production environment
+
+**Root Cause Analysis**:
+1. **Artifact Versioning**: ADK stores artifacts with version suffixes (e.g., `media_abc123.jpg v1`)
+2. **Version Parsing**: The `load_artifact()` function expected base filenames without version strings
+3. **Environment Issues**: ADK Python package wasn't installed, causing import failures
+4. **Pattern Variations**: Different version formats needed support (`v1`, `_v1`, `(1)`)
+
+**Complete Solution Implemented**:
+
+```python
+async def upload_artifact_to_fal(filename: str, tool_context: ToolContext) -> str:
+    """Enhanced artifact upload with comprehensive version handling"""
+    
+    # 1. Multiple filename pattern attempts
+    possible_filenames = [filename]  # Original
+    
+    # 2. Handle version suffixes with regex patterns
+    version_patterns = [
+        r' v\d+$',      # " v1", " v2", etc.
+        r'_v\d+$',      # "_v1", "_v2", etc.  
+        r' \(\d+\)$',   # " (1)", " (2)", etc.
+    ]
+    
+    for pattern in version_patterns:
+        cleaned = re.sub(pattern, '', filename)
+        if cleaned != filename:
+            possible_filenames.append(cleaned)
+    
+    # 3. Try loading with each filename variation
+    for attempt_filename in possible_filenames:
+        try:
+            artifact_part = await tool_context.load_artifact(attempt_filename)
+            break  # Success!
+        except Exception as error:
+            continue  # Try next variation
+    
+    # 4. Auto-retrieve FAL_KEY from Google Secret Manager
+    if not os.getenv("FAL_KEY"):
+        from google.cloud import secretmanager
+        client = secretmanager.SecretManagerServiceClient()
+        secret_name = f"projects/{project_id}/secrets/fal-api-key/versions/latest"
+        response = client.access_secret_version(request={"name": secret_name})
+        os.environ["FAL_KEY"] = response.payload.data.decode("UTF-8")
+    
+    # 5. Upload to fal.ai CDN with enhanced error handling
+    import fal_client
+    file_url = fal_client.upload_file(temp_path)
+    
+    return f"fal.ai URL: {file_url}"
+```
+
+**Key Improvements**:
+- ✅ **Robust Version Handling**: Automatically strips version suffixes from filenames
+- ✅ **Multiple Pattern Support**: Handles `v1`, `_v1`, `(1)` and other common formats
+- ✅ **Fallback Strategy**: Tries multiple filename variations until one succeeds
+- ✅ **Secret Manager Integration**: Automatic FAL_KEY retrieval for production environments
+- ✅ **Enhanced Error Reporting**: Shows all attempted variations for debugging
+- ✅ **Dependencies Resolved**: ADK package installation and import fixes
+- ✅ **Production Ready**: Works seamlessly across staging and production environments
+
+**User Experience Impact**:
+```
+Before: ❌ Error uploading artifact to fal.ai
+        💭 "invalid literal for int() with base 10: 'v1'"
+
+After:  ✅ Successfully uploaded 'image.jpg v1' to fal.ai storage!
+        📎 fal.ai URL: https://v3b.fal.media/files/b/koala/...
+        🎯 Ready for advanced fal.ai model processing
+        💡 Automatically tried filenames: ['image.jpg v1', 'image.jpg']
+```
+
+**Technical Validation**:
+- Tested with various ADK artifact naming patterns
+- Confirmed Secret Manager FAL_KEY retrieval works
+- Enhanced debug logging for production troubleshooting
+- Backwards compatible with existing artifact workflows
+
+**Deployment Considerations**:
+- No manual environment variable setup required in production
+- FAL_KEY automatically managed via Terraform-deployed Google Secret Manager
+- Comprehensive error handling prevents service disruption
+- Works across all deployment environments (dev, staging, production)
 
 #### 📁 **Project Structure Updates**
 
