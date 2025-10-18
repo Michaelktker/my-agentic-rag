@@ -472,61 +472,146 @@ Updated: Added artifact-to-URL upload for fal.ai integration - 2025-10-18"""
 
 async def upload_artifact_to_fal(filename: str, tool_context: ToolContext) -> str:
     """
-    Upload an artifact to a publicly accessible location for fal.ai processing.
-    This function loads an artifact and makes it available via a public URL.
+    Upload an artifact to fal.ai storage for processing with fal.ai models.
+    This function loads an artifact, saves it temporarily, and uploads it to fal.ai's CDN.
 
     Args:
         filename (str): The name of the artifact file to upload
         tool_context (ToolContext): Context for accessing artifacts
 
     Returns:
-        str: Public URL for the uploaded file or error message
+        str: fal.ai file URL for the uploaded file or error message
     """
     try:
-        # Load the artifact
-        artifact_part = await tool_context.load_artifact(filename)
+        # First, try to work around the version issue by using filename without version
+        base_filename = filename
+        if ' v' in filename:
+            base_filename = filename.split(' v')[0]  # Remove version part
+            print(f"DEBUG: Stripped version from filename: '{filename}' -> '{base_filename}'")
+        
+        # Load the artifact with base filename first
+        artifact_part = None
+        try:
+            artifact_part = await tool_context.load_artifact(base_filename)
+            print(f"DEBUG: Successfully loaded artifact with base filename: {base_filename}")
+        except Exception as base_error:
+            print(f"DEBUG: Failed to load with base filename '{base_filename}': {base_error}")
+            # Try with original filename
+            try:
+                artifact_part = await tool_context.load_artifact(filename)
+                print(f"DEBUG: Successfully loaded artifact with original filename: {filename}")
+            except Exception as orig_error:
+                print(f"DEBUG: Failed to load with original filename '{filename}': {orig_error}")
+                return f"Could not load artifact '{filename}'. Base error: {base_error}. Original error: {orig_error}"
         
         if not artifact_part:
             return f"Artifact '{filename}' not found. Use list_user_artifacts to see available files."
         
-        # Extract artifact data
-        if hasattr(artifact_part, 'inline_data') and artifact_part.inline_data:
-            mime_type = artifact_part.inline_data.mime_type
-            data = artifact_part.inline_data.data
-        elif hasattr(artifact_part, 'data'):
-            mime_type = getattr(artifact_part, 'mimeType', 'application/octet-stream')
-            data = artifact_part.data
-        else:
-            return f"Could not extract data from artifact '{filename}'"
+        # Debug: Log the artifact structure to understand the issue
+        print(f"DEBUG: artifact_part type: {type(artifact_part)}")
+        print(f"DEBUG: artifact_part attributes: {dir(artifact_part)}")
+        if hasattr(artifact_part, '__dict__'):
+            print(f"DEBUG: artifact_part.__dict__: {artifact_part.__dict__}")
         
-        # For now, we'll save to Google Cloud Storage and return a public URL
-        # This requires the storage bucket to be configured for public access
+        # Extract artifact data - be more careful with data extraction
+        data = None
+        mime_type = 'application/octet-stream'
+        
         try:
-            from google.cloud import storage
+            if hasattr(artifact_part, 'inline_data') and artifact_part.inline_data:
+                mime_type = artifact_part.inline_data.mime_type
+                data = artifact_part.inline_data.data
+                print(f"DEBUG: Using inline_data, mime_type: {mime_type}, data_type: {type(data)}")
+            elif hasattr(artifact_part, 'data'):
+                mime_type = getattr(artifact_part, 'mimeType', 'application/octet-stream')
+                data = artifact_part.data
+                print(f"DEBUG: Using direct data, mime_type: {mime_type}, data_type: {type(data)}")
+            else:
+                # Try alternative attribute names
+                for attr in ['content', 'bytes', 'binary_data']:
+                    if hasattr(artifact_part, attr):
+                        data = getattr(artifact_part, attr)
+                        print(f"DEBUG: Found data in {attr}, data_type: {type(data)}")
+                        break
+                        
+            if data is None:
+                return f"Could not extract data from artifact '{filename}'. Available attributes: {dir(artifact_part)}"
+        
+        except Exception as extract_error:
+            return f"Error extracting data from artifact '{filename}': {extract_error}"
+        
+        # Convert data to bytes if needed
+        if isinstance(data, str):
+            try:
+                import base64
+                data = base64.b64decode(data)
+                print(f"DEBUG: Decoded base64 string to bytes, length: {len(data)}")
+            except Exception as b64_error:
+                print(f"DEBUG: Failed to decode as base64: {b64_error}")
+                data = data.encode('utf-8')
+        elif not isinstance(data, bytes):
+            return f"Unexpected data type: {type(data)}. Expected bytes or base64 string."
+        
+        print(f"DEBUG: Final data type: {type(data)}, length: {len(data)}")
+        
+        # Upload to fal.ai storage using their client
+        try:
             import tempfile
+            import os
             import uuid
             
-            # Create a temporary file
-            temp_filename = f"fal_upload_{uuid.uuid4()}_{filename}"
+            # Create a temporary file with the artifact data
+            temp_filename = f"fal_upload_{uuid.uuid4()}_{base_filename}"
+            temp_path = os.path.join(tempfile.gettempdir(), temp_filename)
             
-            # Initialize storage client
-            client = storage.Client(project=project_id)
-            bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", f"{project_id}-artifacts")
-            bucket = client.bucket(bucket_name)
+            # Write artifact data to temporary file
+            with open(temp_path, 'wb') as temp_file:
+                temp_file.write(data)
             
-            # Upload to GCS
-            blob = bucket.blob(f"fal-uploads/{temp_filename}")
-            blob.upload_from_string(data, content_type=mime_type)
+            print(f"DEBUG: Wrote {len(data)} bytes to {temp_path}")
             
-            # Make publicly accessible (temporary)
-            blob.make_public()
-            
-            public_url = blob.public_url
-            
-            return f"Successfully uploaded '{filename}' to public URL: {public_url}\n\nThis URL can be used with fal.ai models. The file will be automatically cleaned up after 24 hours."
+            # Use fal_client to upload to fal.ai CDN
+            try:
+                import fal_client
+                
+                # Ensure FAL_KEY is available - get it from Secret Manager if needed
+                if not os.getenv("FAL_KEY"):
+                    try:
+                        from google.cloud import secretmanager
+                        client = secretmanager.SecretManagerServiceClient()
+                        secret_name = f"projects/{project_id}/secrets/fal-api-key/versions/latest"
+                        response = client.access_secret_version(request={"name": secret_name})
+                        fal_key = response.payload.data.decode("UTF-8")
+                        os.environ["FAL_KEY"] = fal_key
+                        print(f"DEBUG: Retrieved FAL_KEY from Secret Manager")
+                    except Exception as secret_error:
+                        os.unlink(temp_path)  # Clean up
+                        return f"Error accessing FAL_KEY from Secret Manager: {secret_error}"
+                
+                # Upload file to fal.ai storage
+                print(f"DEBUG: Uploading to fal.ai...")
+                file_url = fal_client.upload_file(temp_path)
+                print(f"DEBUG: Upload successful: {file_url}")
+                
+                # Clean up temporary file
+                os.unlink(temp_path)
+                
+                return f"Successfully uploaded '{filename}' to fal.ai storage!\n\nfal.ai URL: {file_url}\n\nThis URL can now be used with fal.ai models for image-to-video generation and other processing."
+                
+            except ImportError:
+                # Fallback: Try to use the MCP fal server's upload functionality
+                # This would require making a request to the MCP server
+                os.unlink(temp_path)  # Clean up
+                return f"fal_client not available. To upload artifacts to fal.ai storage, you need to install fal_client: pip install fal-client\n\nAlternatively, the fal.ai agent can help with uploads using the MCP server."
+                
+            except Exception as fal_error:
+                # Clean up temporary file on error
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                return f"Error uploading to fal.ai storage: {fal_error}\n\nMake sure your FAL_KEY environment variable is set correctly."
             
         except Exception as e:
-            return f"Error uploading artifact to public storage: {e}\n\nNote: You may need to configure a public storage bucket for fal.ai integration."
+            return f"Error preparing file for fal.ai upload: {e}"
     
     except Exception as e:
         return f"Error processing artifact '{filename}': {e}"

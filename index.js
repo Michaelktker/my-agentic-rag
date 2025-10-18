@@ -1036,28 +1036,32 @@ class WhatsAppBot {
                 // Check if user exists in Google Storage
                 const existingSession = await this.sessionManager.getUserSession(userId);
                 
+                // Always create a new ADK session (ADK sessions are ephemeral)
+                const adkSessionId = await this.createADKSession(userId);
+                if (!adkSessionId) {
+                    await this.sendMessage(remoteJid, 'Sorry, I\'m unable to create a new conversation session right now. Please try again later.');
+                    return;
+                }
+                
                 if (existingSession) {
-                    // Existing user - use stored session ID
+                    // Existing user - create new ADK session but keep user context
                     session = {
-                        sessionId: existingSession.sessionId,
+                        sessionId: adkSessionId,
                         userId: userId,
-                        createdAt: new Date(existingSession.createdAt),
+                        createdAt: new Date(),
                         lastActivity: new Date(),
                         isReturningUser: true
                     };
                     
-                    // Update activity in storage
-                    await this.sessionManager.updateUserActivity(userId);
+                    // Update session storage with new ADK session ID
+                    await this.sessionManager.storeUserSession(userId, adkSessionId, {
+                        isReturningUser: true,
+                        previousSessionDate: existingSession.createdAt
+                    });
                     
-                    logger.info(`Restored existing session ${session.sessionId} for returning user ${userId}`);
+                    logger.info(`Created new ADK session ${session.sessionId} for returning user ${userId}`);
                 } else {
                     // New user - create new ADK session
-                    const adkSessionId = await this.createADKSession(userId);
-                    if (!adkSessionId) {
-                        await this.sendMessage(remoteJid, 'Sorry, I\'m unable to create a new conversation session right now. Please try again later.');
-                        return;
-                    }
-                    
                     session = {
                         sessionId: adkSessionId,
                         userId: userId,
@@ -1229,18 +1233,21 @@ class WhatsAppBot {
             };
 
             const payload = {
-                appName: ADK_APP_NAME,
-                userId: userId,
-                state: initialState
+                sessionId: this.generateSessionId(),
+                state: initialState,
+                events: null
             };
 
             logger.info(`📤 Creating ADK session for user: ${userId} using endpoint: ${adkUrl}`);
 
-            const response = await axios.post(`${adkUrl}/apps/${ADK_APP_NAME}/users/${userId}/sessions`, payload, {
+            const response = await axios.post(`${adkUrl}/apps/${ADK_APP_NAME}/users/${encodeURIComponent(userId)}/sessions`, payload, {
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                timeout: config.adk.timeout
+                timeout: config.adk.timeout,
+                validateStatus: function (status) {
+                    return status >= 200 && status < 600;
+                }
             });
 
             if (response.status === 200 && response.data.id) {
@@ -1252,6 +1259,7 @@ class WhatsAppBot {
                 return response.data.id;
             } else {
                 logger.error(`Failed to create ADK session: ${response.status}`);
+                logger.error(`Response data:`, response.data);
                 return null;
             }
         } catch (error) {
@@ -1373,10 +1381,7 @@ class WhatsAppBot {
                     role: "user"
                 },
                 streaming: false, // Disable streaming to test non-streaming responses
-                // Include system context about user state persistence
-                systemContext: {
-                    instructions: "You have access to persistent user state with 'user:' prefix. Use user:total_sessions, user:first_interaction, user:last_login, and other user: prefixed state to personalize responses. Session-scoped state resets on new sessions. Remember user preferences and conversation history across sessions."
-                }
+                stateDelta: null // Optional state changes for the session
             };
 
             logger.info(`📤 Sending to ADK: ${adkUrl}/run`);
