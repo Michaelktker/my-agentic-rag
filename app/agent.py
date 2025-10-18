@@ -170,13 +170,26 @@ async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_con
         
         # Get user ID from tool context if available
         # For WhatsApp users, this will be something like: 6592377976@s.whatsapp.net
-        user_id = getattr(tool_context, 'user_id', None) or 'unknown_user'
+        user_id = getattr(tool_context, 'user_id', None)
+        if not user_id:
+            # Try to get from context metadata or session info
+            session_id = getattr(tool_context, 'session_id', '')
+            if session_id and session_id.startswith('wa_'):
+                # Extract user ID from WhatsApp session data - we need to search all users
+                # Since we can't determine the exact user, we'll search across all app/ subdirectories
+                user_id = '*'  # Wildcard to search all users
+            else:
+                user_id = 'unknown_user'
         
         # Search for the artifact across all sessions for this user
         # Path pattern: app/{user_id}/{session_id}/{filename}/{version}
-        prefix = f"app/{user_id}/"
-        
-        print(f"DEBUG: Searching for artifact '{filename}' for user '{user_id}' with prefix '{prefix}'")
+        if user_id == '*':
+            # Search across all users if we can't determine the specific user
+            prefix = "app/"
+            print(f"DEBUG: Searching for artifact '{filename}' across all users with prefix '{prefix}'")
+        else:
+            prefix = f"app/{user_id}/"
+            print(f"DEBUG: Searching for artifact '{filename}' for user '{user_id}' with prefix '{prefix}'")
         
         # List all blobs with this prefix to find sessions containing our artifact
         blobs = bucket.list_blobs(prefix=prefix)
@@ -592,12 +605,25 @@ async def upload_artifact_to_fal(filename: str, tool_context: ToolContext) -> st
         bucket = storage_client.bucket(artifacts_bucket_name)
         
         # Get user ID from tool context if available
-        user_id = getattr(tool_context, 'user_id', None) or 'unknown_user'
+        user_id = getattr(tool_context, 'user_id', None)
+        if not user_id:
+            # Try to get from context metadata or session info
+            session_id = getattr(tool_context, 'session_id', '')
+            if session_id and session_id.startswith('wa_'):
+                # Extract user ID from WhatsApp session data - we need to search all users
+                # Since we can't determine the exact user, we'll search across all app/ subdirectories
+                user_id = '*'  # Wildcard to search all users
+            else:
+                user_id = 'unknown_user'
         
         # Search for the artifact across all sessions for this user
-        prefix = f"app/{user_id}/"
-        
-        print(f"DEBUG: Searching for artifact '{filename}' for user '{user_id}' with prefix '{prefix}'")
+        if user_id == '*':
+            # Search across all users if we can't determine the specific user
+            prefix = "app/"
+            print(f"DEBUG: upload_artifact_to_fal - Searching for artifact '{filename}' across all users with prefix '{prefix}'")
+        else:
+            prefix = f"app/{user_id}/"
+            print(f"DEBUG: upload_artifact_to_fal - Searching for artifact '{filename}' for user '{user_id}' with prefix '{prefix}'")
         
         # List all blobs with this prefix to find sessions containing our artifact
         blobs = bucket.list_blobs(prefix=prefix)
