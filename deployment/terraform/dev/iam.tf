@@ -83,3 +83,20 @@ resource "google_project_iam_member" "vertexai_pipeline_sa_roles" {
   depends_on = [resource.google_project_service.services]
 }
 
+# IAM binding for FAL API key secret access by app service account
+resource "google_secret_manager_secret_iam_member" "fal_api_key_access" {
+  for_each = {
+    staging = var.dev_project_id
+  }
+  
+  project   = each.value
+  secret_id = google_secret_manager_secret.fal_api_key[each.key].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.app_sa.email}"
+  
+  depends_on = [
+    google_secret_manager_secret.fal_api_key,
+    google_service_account.app_sa
+  ]
+}
+

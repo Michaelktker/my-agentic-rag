@@ -48,6 +48,16 @@ resource "google_cloud_run_v2_service" "app" {
         name  = "DATA_STORE_REGION"
         value = var.data_store_region
       }
+
+      env {
+        name = "FAL_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.fal_api_key["staging"].secret_id
+            version = "latest"
+          }
+        }
+      }
     }
 
     service_account = google_service_account.app_sa.email

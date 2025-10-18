@@ -79,4 +79,11 @@ variable "data_store_region" {
   default     = "us"
 }
 
+variable "fal_api_key" {
+  type        = string
+  description = "API key for fal.ai service for image/video generation"
+  sensitive   = true
+  default     = ""
+}
+
 
