@@ -154,25 +154,26 @@ async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_con
     """
     try:
         # Handle potential version suffixes in filename
-        possible_filenames = [filename]
+        # The ADK artifact system stores files with version suffixes like " v1", " v2" etc.
+        # but list_user_artifacts() returns filenames without the version suffix
+        # We need to try different variations to find the actual artifact
         
-        # If filename has version suffix, try without it
+        possible_filenames = []
+        
+        # If the filename already has a version suffix, use it as-is and try without it
         if ' v' in filename:
+            possible_filenames.append(filename)  # Try with version first
             base_filename = filename.split(' v')[0]
-            possible_filenames.append(base_filename)
-        
-        # Also try with common version patterns
-        import re
-        version_patterns = [
-            r' v\d+$',      # " v1", " v2", etc.
-            r'_v\d+$',      # "_v1", "_v2", etc.  
-            r' \(\d+\)$',   # " (1)", " (2)", etc.
-        ]
-        
-        for pattern in version_patterns:
-            cleaned = re.sub(pattern, '', filename)
-            if cleaned != filename and cleaned not in possible_filenames:
-                possible_filenames.append(cleaned)
+            possible_filenames.append(base_filename)  # Then try without version
+        else:
+            # If no version suffix, try adding common version patterns first
+            # since ADK often stores with versions even if list doesn't show them
+            version_suffixes = [' v1', ' v2', ' v3', '_v1', '_v2', '_v3', ' (1)', ' (2)', ' (3)']
+            for suffix in version_suffixes:
+                possible_filenames.append(filename + suffix)
+            
+            # Then try the original filename as-is
+            possible_filenames.append(filename)
         
         # Try loading artifact with different filename variations
         artifact_part = None
@@ -519,32 +520,29 @@ async def upload_artifact_to_fal(filename: str, tool_context: ToolContext) -> st
     """
     try:
         # Handle version suffixes more robustly
-        # ADK artifact system sometimes appends version like " v1", " v2" etc.
+        # The ADK artifact system stores files with version suffixes like " v1", " v2" etc.
+        # but list_user_artifacts() returns filenames without the version suffix
         # We need to try different variations to find the actual artifact
         
-        possible_filenames = [filename]  # Start with original filename
+        possible_filenames = []
         base_filename = filename  # Initialize base_filename with the original filename
         
-        # If filename has version suffix, try without it
+        # If the filename already has a version suffix, use it as-is and try without it
         if ' v' in filename:
+            possible_filenames.append(filename)  # Try with version first
             base_filename = filename.split(' v')[0]
-            possible_filenames.append(base_filename)
+            possible_filenames.append(base_filename)  # Then try without version
             print(f"DEBUG: Detected version in filename: '{filename}' -> base: '{base_filename}'")
-        
-        # Also try with common version patterns
-        import re
-        version_patterns = [
-            r' v\d+$',      # " v1", " v2", etc.
-            r'_v\d+$',      # "_v1", "_v2", etc.  
-            r' \(\d+\)$',   # " (1)", " (2)", etc.
-        ]
-        
-        for pattern in version_patterns:
-            cleaned = re.sub(pattern, '', filename)
-            if cleaned != filename and cleaned not in possible_filenames:
-                possible_filenames.append(cleaned)
-                if base_filename == filename:  # Update base_filename if this is the first pattern match
-                    base_filename = cleaned
+        else:
+            # If no version suffix, try adding common version patterns first
+            # since ADK often stores with versions even if list doesn't show them
+            version_suffixes = [' v1', ' v2', ' v3', '_v1', '_v2', '_v3', ' (1)', ' (2)', ' (3)']
+            for suffix in version_suffixes:
+                possible_filenames.append(filename + suffix)
+            
+            # Then try the original filename as-is
+            possible_filenames.append(filename)
+            base_filename = filename
         
         print(f"DEBUG: Will try these filenames: {possible_filenames}")
         
