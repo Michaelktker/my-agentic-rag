@@ -153,58 +153,117 @@ async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_con
         str: Information about the loaded artifact for analysis
     """
     try:
-        # Handle potential version suffixes in filename
-        # The ADK artifact system stores files with version suffixes like " v1", " v2" etc.
-        # but list_user_artifacts() returns filenames without the version suffix
-        # We need to try different variations to find the actual artifact
+        # CRITICAL FIX: Session ID mismatch issue
+        # The WhatsApp bot saves artifacts with WhatsApp session IDs (e.g., wa_1760803702930_tjfg41yyy)
+        # but the ADK tool_context.load_artifact() tries to load from the current ADK session
+        # We need to access artifacts across all sessions for this user
         
-        possible_filenames = []
+        # Try to load using the direct GCS approach first since tool_context has session scope limitations
+        from google.cloud import storage
+        import json
+        import base64
         
-        # If the filename already has a version suffix, use it as-is and try without it
-        if ' v' in filename:
-            possible_filenames.append(filename)  # Try with version first
-            base_filename = filename.split(' v')[0]
-            possible_filenames.append(base_filename)  # Then try without version
-        else:
-            # If no version suffix, try adding common version patterns first
-            # since ADK often stores with versions even if list doesn't show them
-            version_suffixes = [' v1', ' v2', ' v3', '_v1', '_v2', '_v3', ' (1)', ' (2)', ' (3)']
-            for suffix in version_suffixes:
-                possible_filenames.append(filename + suffix)
-            
-            # Then try the original filename as-is
-            possible_filenames.append(filename)
+        # Get bucket from environment or default
+        artifacts_bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(artifacts_bucket_name)
         
-        # Try loading artifact with different filename variations
-        artifact_part = None
-        successful_filename = None
-        last_error = None
+        # Get user ID from tool context if available
+        # For WhatsApp users, this will be something like: 6592377976@s.whatsapp.net
+        user_id = getattr(tool_context, 'user_id', None) or 'unknown_user'
         
-        for attempt_filename in possible_filenames:
+        # Search for the artifact across all sessions for this user
+        # Path pattern: app/{user_id}/{session_id}/{filename}/{version}
+        prefix = f"app/{user_id}/"
+        
+        print(f"DEBUG: Searching for artifact '{filename}' for user '{user_id}' with prefix '{prefix}'")
+        
+        # List all blobs with this prefix to find sessions containing our artifact
+        blobs = bucket.list_blobs(prefix=prefix)
+        artifact_found = None
+        found_path = None
+        
+        for blob in blobs:
+            # Extract the path components
+            path_parts = blob.name.split('/')
+            if len(path_parts) >= 5:  # app/user_id/session_id/filename/version
+                found_filename = path_parts[3]
+                version = path_parts[4]
+                
+                # Check if this blob matches our target filename (with or without version suffix)
+                if (found_filename == filename or 
+                    found_filename.startswith(filename.split(' v')[0]) or
+                    filename.startswith(found_filename)):
+                    
+                    print(f"DEBUG: Found potential match: {blob.name}")
+                    
+                    # Try to download and parse this artifact
+                    try:
+                        data = blob.download_as_bytes()
+                        
+                        # Check if it's JSON (our artifact format) or raw data
+                        try:
+                            artifact_data = json.loads(data.decode('utf-8'))
+                            if 'data' in artifact_data and 'mimeType' in artifact_data:
+                                # This is our JSON-wrapped artifact format
+                                artifact_found = {
+                                    'data': artifact_data['data'],
+                                    'mimeType': artifact_data['mimeType'],
+                                    'inline_data': {
+                                        'mime_type': artifact_data['mimeType'],
+                                        'data': artifact_data['data']
+                                    }
+                                }
+                                found_path = blob.name
+                                print(f"DEBUG: ✅ Successfully loaded artifact from: {found_path}")
+                                break
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            # This might be raw binary data (ADK format)
+                            artifact_found = {
+                                'data': base64.b64encode(data).decode('utf-8'),
+                                'mimeType': 'application/octet-stream',  # Default, will be updated
+                                'inline_data': {
+                                    'mime_type': 'application/octet-stream',
+                                    'data': base64.b64encode(data).decode('utf-8')
+                                }
+                            }
+                            found_path = blob.name
+                            print(f"DEBUG: ✅ Successfully loaded raw artifact from: {found_path}")
+                            break
+                            
+                    except Exception as blob_error:
+                        print(f"DEBUG: Failed to load blob {blob.name}: {blob_error}")
+                        continue
+        
+        if not artifact_found:
+            # Fallback: try the original ADK load_artifact method
+            print(f"DEBUG: Direct GCS search failed, trying ADK tool_context.load_artifact()")
             try:
-                artifact_part = await tool_context.load_artifact(attempt_filename)
-                successful_filename = attempt_filename
-                break
-            except Exception as error:
-                last_error = error
-                continue
+                artifact_part = await tool_context.load_artifact(filename)
+                if artifact_part:
+                    artifact_found = artifact_part
+                    found_path = f"ADK_context:{filename}"
+                    print(f"DEBUG: ✅ Loaded via tool_context: {found_path}")
+            except Exception as context_error:
+                print(f"DEBUG: tool_context.load_artifact also failed: {context_error}")
         
-        if artifact_part is None:
-            return f"Artifact '{filename}' not found. Tried variations: {possible_filenames}. Last error: {last_error}"
-        
-        if not artifact_part:
-            return f"Artifact '{filename}' not found. Use list_user_artifacts to see available files."
+        if not artifact_found:
+            return f"Artifact '{filename}' not found in any session for user '{user_id}'. Searched prefix: '{prefix}'"
         
         # Extract artifact information
         mime_type = "unknown"
         data_size = 0
         
-        if hasattr(artifact_part, 'inline_data') and artifact_part.inline_data:
-            mime_type = artifact_part.inline_data.mime_type or "unknown"
-            data_size = len(artifact_part.inline_data.data) if artifact_part.inline_data.data else 0
-        elif hasattr(artifact_part, 'mimeType'):
-            mime_type = artifact_part.mimeType or "unknown"
-            data_size = len(artifact_part.data) if hasattr(artifact_part, 'data') and artifact_part.data else 0
+        if hasattr(artifact_found, 'inline_data') and artifact_found.inline_data:
+            mime_type = artifact_found.inline_data.mime_type or "unknown"
+            data_size = len(artifact_found.inline_data.data) if artifact_found.inline_data.data else 0
+        elif hasattr(artifact_found, 'mimeType'):
+            mime_type = artifact_found.mimeType or "unknown"
+            data_size = len(artifact_found.data) if hasattr(artifact_found, 'data') and artifact_found.data else 0
+        elif isinstance(artifact_found, dict):
+            # Handle our dictionary format
+            mime_type = artifact_found.get('mimeType', 'unknown')
+            data_size = len(artifact_found.get('data', '')) if artifact_found.get('data') else 0
         
         # Format file size
         if data_size > 1024 * 1024:
@@ -519,165 +578,180 @@ async def upload_artifact_to_fal(filename: str, tool_context: ToolContext) -> st
         str: fal.ai file URL for the uploaded file or error message
     """
     try:
-        # Handle version suffixes more robustly
-        # The ADK artifact system stores files with version suffixes like " v1", " v2" etc.
-        # but list_user_artifacts() returns filenames without the version suffix
-        # We need to try different variations to find the actual artifact
+        # CRITICAL FIX: Session ID mismatch issue - same as load_and_analyze_artifact
+        # Use direct GCS access to find artifacts across all sessions for this user
         
-        possible_filenames = []
-        base_filename = filename  # Initialize base_filename with the original filename
+        from google.cloud import storage
+        import json
+        import base64
+        import tempfile
         
-        # If the filename already has a version suffix, use it as-is and try without it
-        if ' v' in filename:
-            possible_filenames.append(filename)  # Try with version first
-            base_filename = filename.split(' v')[0]
-            possible_filenames.append(base_filename)  # Then try without version
-            print(f"DEBUG: Detected version in filename: '{filename}' -> base: '{base_filename}'")
-        else:
-            # If no version suffix, try adding common version patterns first
-            # since ADK often stores with versions even if list doesn't show them
-            version_suffixes = [' v1', ' v2', ' v3', '_v1', '_v2', '_v3', ' (1)', ' (2)', ' (3)']
-            for suffix in version_suffixes:
-                possible_filenames.append(filename + suffix)
-            
-            # Then try the original filename as-is
-            possible_filenames.append(filename)
-            base_filename = filename
+        # Get bucket from environment or default
+        artifacts_bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(artifacts_bucket_name)
         
-        print(f"DEBUG: Will try these filenames: {possible_filenames}")
+        # Get user ID from tool context if available
+        user_id = getattr(tool_context, 'user_id', None) or 'unknown_user'
         
-        # Try loading artifact with different filename variations
-        artifact_part = None
-        successful_filename = None
-        last_error = None
+        # Search for the artifact across all sessions for this user
+        prefix = f"app/{user_id}/"
         
-        for attempt_filename in possible_filenames:
-            try:
-                print(f"DEBUG: Attempting to load artifact with filename: '{attempt_filename}'")
-                artifact_part = await tool_context.load_artifact(attempt_filename)
-                successful_filename = attempt_filename
-                print(f"DEBUG: ✅ Successfully loaded artifact with filename: '{attempt_filename}'")
-                break
-            except Exception as error:
-                print(f"DEBUG: ❌ Failed to load with filename '{attempt_filename}': {error}")
-                last_error = error
-                continue
+        print(f"DEBUG: Searching for artifact '{filename}' for user '{user_id}' with prefix '{prefix}'")
         
-        if artifact_part is None:
-            return f"Could not load artifact '{filename}'. Tried filenames: {possible_filenames}. Last error: {last_error}"
+        # List all blobs with this prefix to find sessions containing our artifact
+        blobs = bucket.list_blobs(prefix=prefix)
+        artifact_found = None
+        found_path = None
         
-        if not artifact_part:
-            return f"Artifact '{filename}' not found or is empty. Use list_user_artifacts to see available files."
-        
-        # Debug: Log the artifact structure to understand it better
-        print(f"DEBUG: artifact_part type: {type(artifact_part)}")
-        if hasattr(artifact_part, '__dict__'):
-            print(f"DEBUG: artifact_part attributes: {list(artifact_part.__dict__.keys())}")
-        else:
-            print(f"DEBUG: artifact_part dir: {[attr for attr in dir(artifact_part) if not attr.startswith('_')]}")
-        
-        # Extract artifact data more carefully
-        data = None
-        mime_type = 'application/octet-stream'
-        
-        try:
-            if hasattr(artifact_part, 'inline_data') and artifact_part.inline_data:
-                mime_type = artifact_part.inline_data.mime_type
-                data = artifact_part.inline_data.data
-                print(f"DEBUG: Using inline_data, mime_type: {mime_type}, data_type: {type(data)}")
-            elif hasattr(artifact_part, 'data'):
-                mime_type = getattr(artifact_part, 'mimeType', 'application/octet-stream')
-                data = artifact_part.data
-                print(f"DEBUG: Using direct data, mime_type: {mime_type}, data_type: {type(data)}")
-            else:
-                # Try alternative attribute names
-                for attr in ['content', 'bytes', 'binary_data']:
-                    if hasattr(artifact_part, attr):
-                        data = getattr(artifact_part, attr)
-                        print(f"DEBUG: Found data in {attr}, data_type: {type(data)}")
-                        break
-                        
-            if data is None:
-                return f"Could not extract data from artifact '{filename}'. Available attributes: {dir(artifact_part)}"
-        
-        except Exception as extract_error:
-            return f"Error extracting data from artifact '{filename}': {extract_error}"
-        
-        # Convert data to bytes if needed
-        if isinstance(data, str):
-            try:
-                import base64
-                data = base64.b64decode(data)
-                print(f"DEBUG: Decoded base64 string to bytes, length: {len(data)}")
-            except Exception as b64_error:
-                print(f"DEBUG: Failed to decode as base64: {b64_error}")
-                data = data.encode('utf-8')
-        elif not isinstance(data, bytes):
-            return f"Unexpected data type: {type(data)}. Expected bytes or base64 string."
-        
-        print(f"DEBUG: Final data type: {type(data)}, length: {len(data)}")
-        
-        # Upload to fal.ai storage using their client
-        try:
-            import tempfile
-            import os
-            import uuid
-            
-            # Create a temporary file with the artifact data
-            temp_filename = f"fal_upload_{uuid.uuid4()}_{base_filename}"
-            temp_path = os.path.join(tempfile.gettempdir(), temp_filename)
-            
-            # Write artifact data to temporary file
-            with open(temp_path, 'wb') as temp_file:
-                temp_file.write(data)
-            
-            print(f"DEBUG: Wrote {len(data)} bytes to {temp_path}")
-            
-            # Use fal_client to upload to fal.ai CDN
-            try:
-                import fal_client
+        for blob in blobs:
+            # Extract the path components
+            path_parts = blob.name.split('/')
+            if len(path_parts) >= 5:  # app/user_id/session_id/filename/version
+                found_filename = path_parts[3]
+                version = path_parts[4]
                 
-                # Ensure FAL_KEY is available - get it from Secret Manager if needed
-                if not os.getenv("FAL_KEY"):
+                # Check if this blob matches our target filename (with or without version suffix)
+                if (found_filename == filename or 
+                    found_filename.startswith(filename.split(' v')[0]) or
+                    filename.startswith(found_filename)):
+                    
+                    print(f"DEBUG: Found potential match: {blob.name}")
+                    
+                    # Try to download and parse this artifact
                     try:
-                        from google.cloud import secretmanager
-                        client = secretmanager.SecretManagerServiceClient()
-                        secret_name = f"projects/{project_id}/secrets/fal-api-key/versions/latest"
-                        response = client.access_secret_version(request={"name": secret_name})
-                        fal_key = response.payload.data.decode("UTF-8")
-                        os.environ["FAL_KEY"] = fal_key
-                        print(f"DEBUG: Retrieved FAL_KEY from Secret Manager")
-                    except Exception as secret_error:
-                        os.unlink(temp_path)  # Clean up
-                        return f"Error accessing FAL_KEY from Secret Manager: {secret_error}"
-                
-                # Upload file to fal.ai storage
-                print(f"DEBUG: Uploading to fal.ai...")
-                file_url = fal_client.upload_file(temp_path)
-                print(f"DEBUG: Upload successful: {file_url}")
-                
-                # Clean up temporary file
-                os.unlink(temp_path)
-                
-                return f"Successfully uploaded '{filename}' to fal.ai storage!\n\nfal.ai URL: {file_url}\n\nThis URL can now be used with fal.ai models for image-to-video generation and other processing."
-                
-            except ImportError:
-                # Fallback: Try to use the MCP fal server's upload functionality
-                # This would require making a request to the MCP server
-                os.unlink(temp_path)  # Clean up
-                return f"fal_client not available. To upload artifacts to fal.ai storage, you need to install fal_client: pip install fal-client\n\nAlternatively, the fal.ai agent can help with uploads using the MCP server."
-                
-            except Exception as fal_error:
-                # Clean up temporary file on error
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-                return f"Error uploading to fal.ai storage: {fal_error}\n\nMake sure your FAL_KEY environment variable is set correctly."
+                        data = blob.download_as_bytes()
+                        
+                        # Check if it's JSON (our artifact format) or raw data
+                        try:
+                            artifact_data = json.loads(data.decode('utf-8'))
+                            if 'data' in artifact_data and 'mimeType' in artifact_data:
+                                # This is our JSON-wrapped artifact format
+                                artifact_found = {
+                                    'data': artifact_data['data'],
+                                    'mimeType': artifact_data['mimeType'],
+                                    'inline_data': {
+                                        'mime_type': artifact_data['mimeType'],
+                                        'data': artifact_data['data']
+                                    }
+                                }
+                                found_path = blob.name
+                                print(f"DEBUG: ✅ Successfully loaded artifact from: {found_path}")
+                                break
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            # This might be raw binary data (ADK format)
+                            artifact_found = {
+                                'data': base64.b64encode(data).decode('utf-8'),
+                                'mimeType': 'application/octet-stream',  # Default, will be updated
+                                'inline_data': {
+                                    'mime_type': 'application/octet-stream',
+                                    'data': base64.b64encode(data).decode('utf-8')
+                                }
+                            }
+                            found_path = blob.name
+                            print(f"DEBUG: ✅ Successfully loaded raw artifact from: {found_path}")
+                            break
+                            
+                    except Exception as blob_error:
+                        print(f"DEBUG: Failed to load blob {blob.name}: {blob_error}")
+                        continue
+        
+        if not artifact_found:
+            # Fallback: try the original ADK load_artifact method
+            print(f"DEBUG: Direct GCS search failed, trying ADK tool_context.load_artifact()")
+            try:
+                artifact_part = await tool_context.load_artifact(filename)
+                if artifact_part:
+                    artifact_found = artifact_part
+                    found_path = f"ADK_context:{filename}"
+                    print(f"DEBUG: ✅ Loaded via tool_context: {found_path}")
+            except Exception as context_error:
+                print(f"DEBUG: tool_context.load_artifact also failed: {context_error}")
+        
+        if not artifact_found:
+            return f"Could not load artifact '{filename}' for fal.ai upload. Searched prefix: '{prefix}'"
+        
+        print(f"DEBUG: artifact_found type: {type(artifact_found)}")
+        
+        # Extract data for upload
+        file_data = None
+        mime_type = None
+        
+        if isinstance(artifact_found, dict):
+            # Our dictionary format
+            file_data = artifact_found.get('data')
+            mime_type = artifact_found.get('mimeType')
+            if artifact_found.get('inline_data'):
+                file_data = artifact_found['inline_data'].get('data') or file_data
+                mime_type = artifact_found['inline_data'].get('mime_type') or mime_type
+        elif hasattr(artifact_found, 'inline_data') and artifact_found.inline_data:
+            # ADK Part format
+            file_data = artifact_found.inline_data.data
+            mime_type = artifact_found.inline_data.mime_type
+        elif hasattr(artifact_found, 'data'):
+            # Direct data access
+            file_data = artifact_found.data
+            mime_type = getattr(artifact_found, 'mimeType', 'application/octet-stream')
+        
+        if not file_data:
+            return f"Artifact '{filename}' was found but contains no data"
+        
+        print(f"DEBUG: Extracted data length: {len(file_data) if file_data else 0}, mime_type: {mime_type}")
+        
+        # Decode base64 data if needed
+        try:
+            if isinstance(file_data, str):
+                binary_data = base64.b64decode(file_data)
+            else:
+                binary_data = file_data
+        except Exception as decode_error:
+            return f"Failed to decode artifact data: {decode_error}"
+        
+        # Determine file extension from mime type
+        file_extension = ".bin"  # Default
+        if mime_type:
+            if mime_type.startswith("image/jpeg"):
+                file_extension = ".jpg"
+            elif mime_type.startswith("image/png"):
+                file_extension = ".png"
+            elif mime_type.startswith("image/webp"):
+                file_extension = ".webp"
+            elif mime_type.startswith("image/gif"):
+                file_extension = ".gif"
+            elif mime_type.startswith("video/mp4"):
+                file_extension = ".mp4"
+            elif mime_type.startswith("audio/"):
+                file_extension = ".mp3"
+            elif mime_type.startswith("application/pdf"):
+                file_extension = ".pdf"
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
+            temp_file.write(binary_data)
+            temp_file_path = temp_file.name
+        
+        try:
+            # Now upload to fal.ai
+            import fal_client
             
-        except Exception as e:
-            return f"Error preparing file for fal.ai upload: {e}"
-    
+            print(f"DEBUG: Uploading {len(binary_data)} bytes to fal.ai...")
+            url = fal_client.upload_file(temp_file_path)
+            print(f"DEBUG: ✅ Successfully uploaded to fal.ai: {url}")
+            
+            return f"✅ Successfully uploaded '{filename}' to fal.ai!\n\n🔗 **fal.ai URL**: {url}\n\nYou can now use this URL with fal.ai models for:\n- Image-to-video generation\n- Advanced image processing\n- AI model workflows\n\nFile details:\n- Type: {mime_type}\n- Size: {len(binary_data)} bytes\n- Source: {found_path}"
+            
+        except Exception as upload_error:
+            return f"Failed to upload '{filename}' to fal.ai: {upload_error}"
+        
+        finally:
+            # Clean up temporary file
+            try:
+                os.unlink(temp_file_path)
+            except:
+                pass
+                
     except Exception as e:
-        return f"Error processing artifact '{filename}': {e}"
+        return f"Error uploading artifact '{filename}' to fal.ai: {e}"
 
 
 async def check_endpoint_health(url: str, timeout: int = HEALTH_CHECK_TIMEOUT) -> bool:
