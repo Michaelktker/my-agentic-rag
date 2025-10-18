@@ -18,6 +18,8 @@ import os
 import time
 import base64
 import uuid
+import asyncio
+import aiohttp
 from io import BytesIO
 
 import google
@@ -44,6 +46,13 @@ LLM = "gemini-2.5-flash"
 # GitHub repository constants
 GITHUB_OWNER = "Michaelktker"
 GITHUB_REPO = "my-agentic-rag"
+
+# ADK Endpoint Configuration - Production first, staging fallback
+PRODUCTION_ADK_URL = os.getenv("PRODUCTION_ADK_URL", "https://my-agentic-rag-production.us-central1.run.app")
+STAGING_ADK_URL = os.getenv("STAGING_ADK_URL", "https://my-agentic-rag-454188184539.us-central1.run.app")
+
+# Health check timeout in seconds
+HEALTH_CHECK_TIMEOUT = int(os.getenv("HEALTH_CHECK_TIMEOUT", "5"))
 
 credentials, project_id = google.auth.default()
 
@@ -521,6 +530,56 @@ async def upload_artifact_to_fal(filename: str, tool_context: ToolContext) -> st
     
     except Exception as e:
         return f"Error processing artifact '{filename}': {e}"
+
+
+async def check_endpoint_health(url: str, timeout: int = HEALTH_CHECK_TIMEOUT) -> bool:
+    """
+    Check if an ADK endpoint is healthy and responding.
+    
+    Args:
+        url (str): The endpoint URL to check
+        timeout (int): Timeout in seconds for the health check
+    
+    Returns:
+        bool: True if endpoint is healthy, False otherwise
+    """
+    try:
+        timeout_obj = aiohttp.ClientTimeout(total=timeout)
+        async with aiohttp.ClientSession(timeout=timeout_obj) as session:
+            # Try health endpoint first (common pattern)
+            health_url = f"{url.rstrip('/')}/health"
+            async with session.get(health_url) as response:
+                if response.status == 200:
+                    return True
+            
+            # If health endpoint doesn't exist, try root endpoint
+            async with session.get(url) as response:
+                return response.status in [200, 404]  # 404 is okay for root
+                
+    except (aiohttp.ClientError, asyncio.TimeoutError, Exception):
+        return False
+
+
+async def get_active_adk_endpoint() -> str:
+    """
+    Get the active ADK endpoint, preferring production but falling back to staging.
+    
+    Returns:
+        str: The URL of the active endpoint
+    """
+    # Always try production first
+    if await check_endpoint_health(PRODUCTION_ADK_URL):
+        print(f"✅ Using production endpoint: {PRODUCTION_ADK_URL}")
+        return PRODUCTION_ADK_URL
+    
+    # Fallback to staging
+    if await check_endpoint_health(STAGING_ADK_URL):
+        print(f"⚠️ Production unavailable, using staging endpoint: {STAGING_ADK_URL}")
+        return STAGING_ADK_URL
+    
+    # If both are down, default to production (let the error bubble up)
+    print(f"❌ Both endpoints unavailable, defaulting to production: {PRODUCTION_ADK_URL}")
+    return PRODUCTION_ADK_URL
 
 
 # Initialize MCP tools only if GitHub token is available

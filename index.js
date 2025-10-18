@@ -22,11 +22,22 @@ try {
 }
 
 // Configuration from config file or environment variables
-const ADK_URL = process.env.ADK_URL || config.adk.url;
+const ADK_URL = process.env.ADK_URL || config.adk.url; // Keep for backward compatibility
 const ADK_APP_NAME = process.env.ADK_APP_NAME || config.adk.appName;
 const BUCKET_NAME = process.env.BUCKET_NAME || config.gcs.bucketName;
 const ARTIFACTS_BUCKET_NAME = process.env.ARTIFACTS_BUCKET_NAME || config.gcs.artifactsBucketName;
 const PROJECT_ID = process.env.PROJECT_ID || config.gcs.projectId;
+
+// ADK Endpoint Configuration with fallback
+const PRODUCTION_ADK_URL = process.env.PRODUCTION_ADK_URL || 'https://my-agentic-rag-production.us-central1.run.app';
+const STAGING_ADK_URL = process.env.STAGING_ADK_URL || 'https://my-agentic-rag-454188184539.us-central1.run.app';
+const HEALTH_CHECK_TIMEOUT = parseInt(process.env.HEALTH_CHECK_TIMEOUT || '5000'); // 5 seconds in milliseconds
+
+console.log('🔧 WhatsApp Bot Configuration:');
+console.log(`📍 Production ADK URL: ${PRODUCTION_ADK_URL}`);
+console.log(`📍 Staging ADK URL: ${STAGING_ADK_URL}`);
+console.log(`🏥 Health check timeout: ${HEALTH_CHECK_TIMEOUT}ms`);
+console.log(`📱 App Name: ${ADK_APP_NAME}`);
 
 // Initialize Google Cloud Storage
 const storage = new Storage({ projectId: PROJECT_ID });
@@ -43,6 +54,61 @@ const logger = P({
         }
     }
 });
+
+/**
+ * Health check function for ADK endpoints
+ */
+async function checkEndpointHealth(url, timeout = HEALTH_CHECK_TIMEOUT) {
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
+        
+        // Try health endpoint first
+        const healthUrl = `${url.replace(/\/$/, '')}/health`;
+        const response = await fetch(healthUrl, { 
+            signal: controller.signal,
+            method: 'GET'
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+            logger.debug(`✅ Health check passed for ${url}`);
+            return true;
+        }
+        
+        logger.debug(`❌ Health check failed for ${url}: ${response.status}`);
+        return false;
+        
+    } catch (error) {
+        logger.debug(`❌ Health check failed for ${url}:`, error.message);
+        return false;
+    }
+}
+
+/**
+ * Get active ADK endpoint with fallback logic
+ */
+async function getActiveAdkEndpoint() {
+    logger.info('🔍 Checking ADK endpoint health...');
+    
+    // Try production first
+    if (await checkEndpointHealth(PRODUCTION_ADK_URL)) {
+        logger.info(`✅ Using production endpoint: ${PRODUCTION_ADK_URL}`);
+        return PRODUCTION_ADK_URL;
+    }
+    
+    // Fallback to staging
+    logger.warn('⚠️ Production unavailable, trying staging...');
+    if (await checkEndpointHealth(STAGING_ADK_URL)) {
+        logger.info(`✅ Using staging endpoint: ${STAGING_ADK_URL}`);
+        return STAGING_ADK_URL;
+    }
+    
+    // Both down - use production and let error bubble up
+    logger.error(`❌ Both endpoints unavailable, defaulting to production`);
+    return PRODUCTION_ADK_URL;
+}
 
 /**
  * Custom auth state that stores data in Google Cloud Storage
@@ -1143,6 +1209,9 @@ class WhatsAppBot {
 
     async createADKSession(userId) {
         try {
+            // Get the active ADK endpoint
+            const adkUrl = await getActiveAdkEndpoint();
+            
             // Initialize session with user-scoped state for persistence
             const initialState = {
                 // User-scoped state - persists across sessions (logout/login)
@@ -1165,9 +1234,9 @@ class WhatsAppBot {
                 state: initialState
             };
 
-            logger.info(`Creating ADK session for user: ${userId} with persistent user state`);
+            logger.info(`📤 Creating ADK session for user: ${userId} using endpoint: ${adkUrl}`);
 
-            const response = await axios.post(`${ADK_URL}/apps/${ADK_APP_NAME}/users/${userId}/sessions`, payload, {
+            const response = await axios.post(`${adkUrl}/apps/${ADK_APP_NAME}/users/${userId}/sessions`, payload, {
                 headers: {
                     'Content-Type': 'application/json'
                 },
@@ -1175,7 +1244,7 @@ class WhatsAppBot {
             });
 
             if (response.status === 200 && response.data.id) {
-                logger.info(`Created ADK session: ${response.data.id} for user: ${userId}`);
+                logger.info(`✅ Created ADK session: ${response.data.id} for user: ${userId}`);
                 
                 // If this is a returning user, increment their session count
                 await this.updateReturnUserState(response.data.id, userId);
@@ -1228,12 +1297,15 @@ class WhatsAppBot {
 
     async sendWelcomeMessage(remoteJid, userId, sessionId, isReturningUser = false) {
         try {
+            // Get the active ADK endpoint
+            const adkUrl = await getActiveAdkEndpoint();
+            
             let welcomeMessage;
             
             if (isReturningUser) {
                 // Returning user - get their persistent state
                 try {
-                    const sessionResponse = await axios.get(`${ADK_URL}/apps/${ADK_APP_NAME}/users/${userId}/sessions/${sessionId}`, {
+                    const sessionResponse = await axios.get(`${adkUrl}/apps/${ADK_APP_NAME}/users/${userId}/sessions/${sessionId}`, {
                         headers: { 'Content-Type': 'application/json' },
                         timeout: config.adk.timeout
                     });
@@ -1277,6 +1349,9 @@ class WhatsAppBot {
 
     async sendToADK(message, sessionId, userId, jid, mediaParts = []) {
         try {
+            // Get the active ADK endpoint
+            const adkUrl = await getActiveAdkEndpoint();
+            
             // Prepare message parts (text + media)
             const parts = [
                 {
@@ -1304,10 +1379,11 @@ class WhatsAppBot {
                 }
             };
 
-            logger.info(`Sending to ADK (non-streaming): ${JSON.stringify(payload)}`);
+            logger.info(`📤 Sending to ADK: ${adkUrl}/run`);
+            logger.debug(`Payload: ${JSON.stringify(payload)}`);
 
-            // Use regular endpoint for non-streaming
-            const response = await axios.post(`${ADK_URL}/run`, payload, {
+            // Use selected endpoint for request
+            const response = await axios.post(`${adkUrl}/run`, payload, {
                 headers: {
                     'Content-Type': 'application/json'
                 },
@@ -1333,7 +1409,7 @@ class WhatsAppBot {
                         this.activeSessions.get(userId).sessionId = newSessionId;
                     }
                     
-                    // Retry non-streaming request
+                    // Retry request
                     return await this.sendToADK(message, newSessionId, userId, jid, mediaParts);
                 }
                 
@@ -1341,7 +1417,7 @@ class WhatsAppBot {
                 return 'I apologize, but the AI service is currently experiencing issues. The development team has been notified. Please try again later.';
             }
             
-            // Process successful non-streaming response
+            // Process successful response
             if (response.status === 200) {
                 return await this.handleNonStreamingResponse(response.data, jid, sessionId);
             }
@@ -1351,7 +1427,43 @@ class WhatsAppBot {
             return 'I received your message, but the AI service returned an unexpected response. Please try again.';
 
         } catch (error) {
-            logger.error('Error calling ADK API:', error.message);
+            logger.error('❌ ADK request failed:', error.message);
+            
+            // Emergency fallback if this was production and it failed
+            if (error.config && error.config.url && error.config.url.includes('production')) {
+                logger.warn('🔄 Attempting emergency fallback to staging...');
+                try {
+                    const payload = {
+                        appName: ADK_APP_NAME,
+                        userId: userId,
+                        sessionId: sessionId,
+                        newMessage: {
+                            parts: [{ text: message }, ...mediaParts],
+                            role: "user"
+                        },
+                        streaming: false,
+                        systemContext: {
+                            instructions: "You have access to persistent user state with 'user:' prefix. Use user:total_sessions, user:first_interaction, user:last_login, and other user: prefixed state to personalize responses. Session-scoped state resets on new sessions. Remember user preferences and conversation history across sessions."
+                        }
+                    };
+
+                    const fallbackResponse = await axios.post(`${STAGING_ADK_URL}/run`, payload, {
+                        headers: { 'Content-Type': 'application/json' },
+                        timeout: config.adk.timeout,
+                        validateStatus: function (status) {
+                            return status >= 200 && status < 600;
+                        }
+                    });
+
+                    if (fallbackResponse.status === 200) {
+                        logger.info('✅ Emergency fallback to staging successful');
+                        return await this.handleNonStreamingResponse(fallbackResponse.data, jid, sessionId);
+                    }
+                    
+                } catch (fallbackError) {
+                    logger.error('❌ Emergency fallback also failed:', fallbackError.message);
+                }
+            }
             
             // Return error message to user
             if (error.response) {
