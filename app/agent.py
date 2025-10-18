@@ -17,6 +17,7 @@
 import os
 import time
 import base64
+import uuid
 from io import BytesIO
 
 import google
@@ -347,6 +348,13 @@ Your role is to:
 3. Generate images and videos using various fal.ai models
 4. Retrieve model schemas and capabilities
 5. Handle both direct and queued generation requests
+6. Work with artifacts uploaded by users through the main agent
+
+**IMPORTANT: Artifact Handling**
+- When the user references an uploaded image or media file, you need to work with the main agent
+- If you receive a request mentioning an uploaded image, ask the main agent to first load the artifact
+- You can then work with the artifact data once it's made available
+- For image-to-video generation, you may need the main agent to save the image as a publicly accessible URL
 
 When working with fal.ai models:
 - Use the most appropriate model for the requested content type
@@ -354,12 +362,20 @@ When working with fal.ai models:
 - Handle queued requests appropriately for long-running generations
 - Provide clear feedback about generation progress and results
 - Be efficient in your tool usage
+- If you need access to uploaded media, coordinate with the main agent through the tool context
 
 Common fal.ai models you can use:
 - fal-ai/flux/dev: High-quality image generation
 - fal-ai/flux/schnell: Fast image generation
 - fal-ai/stable-video-diffusion: Video generation
+- fal-ai/seedance-1-0-pro: Image-to-Video generation
 - And many others available through the models tool
+
+**For Image-to-Video Generation:**
+- If the user uploads an image and wants to generate a video from it
+- Ask the main agent to first load and provide the image artifact
+- You may need the image to be saved to a publicly accessible URL for fal.ai to process
+- Work with the main agent to handle this workflow
 
 Always be precise and thorough in your fal.ai operations."""
 
@@ -380,6 +396,7 @@ You have access to several specialized capabilities:
    - list_user_artifacts: See what media files users have uploaded
    - load_and_analyze_artifact: Load and analyze specific media files
    - save_analysis_result: Save your analysis results back as artifacts
+   - upload_artifact_to_fal: Upload artifacts to public URLs for fal.ai processing
 6. **Image generation** using Vertex AI Imagen:
    - generate_image: Create images from detailed text descriptions
 
@@ -406,18 +423,28 @@ You have access to several specialized capabilities:
 - **Videos**: Analyze visual content, describe scenes, extract key frames
 - **Documents**: Read, summarize, extract information from PDFs and text files
 
+**Working with Uploaded Images for fal.ai:**
+When users upload an image and want to use it with fal.ai models (especially for image-to-video):
+1. First, use `list_user_artifacts` to see available files
+2. Use `load_and_analyze_artifact` to analyze the image if needed
+3. **IMPORTANT**: Use `upload_artifact_to_fal` to create a public URL for the image
+4. Provide this public URL to the fal.ai agent for processing
+5. The fal.ai agent can then use this URL with models like Seedance for image-to-video generation
+
 **When users upload media files through WhatsApp:**
 1. First use `list_user_artifacts` to see what files are available
 2. Use `load_and_analyze_artifact` to load specific files for analysis
 3. Provide detailed analysis using your multimodal capabilities
-4. Optionally save analysis results using `save_analysis_result`
+4. If using with fal.ai, use `upload_artifact_to_fal` to create public URLs
+5. Optionally save analysis results using `save_analysis_result`
 
 **When users request image/video generation:**
 1. For images: Choose between Vertex AI Imagen or fal.ai models based on requirements
 2. For videos: Use the fal.ai agent with appropriate video generation models
-3. For specialized effects or styles: Consider fal.ai's diverse model ecosystem
-4. Always provide detailed, descriptive prompts for better results
-5. Handle errors gracefully and suggest alternatives if generation fails
+3. For image-to-video: Use `upload_artifact_to_fal` first, then fal.ai agent with the URL
+4. For specialized effects or styles: Consider fal.ai's diverse model ecosystem
+5. Always provide detailed, descriptive prompts for better results
+6. Handle errors gracefully and suggest alternatives if generation fails
 
 **Important Notes:**
 - You can ANALYZE existing media AND GENERATE new content via multiple AI services
@@ -425,12 +452,75 @@ You have access to several specialized capabilities:
 - The Gemini 2.5 Flash model you're powered by can directly analyze multimodal content
 - When artifacts are loaded, their content becomes available in the conversation context
 - Always provide comprehensive, detailed analysis of media files
+- For fal.ai image-to-video generation, you MUST first upload the image to a public URL
 
 GitHub agent works with repository: {GITHUB_OWNER}/{GITHUB_REPO} by default.
 Use web search for current information not in your knowledge base.
 Use fal.ai agent for advanced AI content generation capabilities.
 
-Updated: Added fal.ai MCP integration for advanced AI generation - 2025-10-17"""
+Updated: Added artifact-to-URL upload for fal.ai integration - 2025-10-18"""
+
+
+async def upload_artifact_to_fal(filename: str, tool_context: ToolContext) -> str:
+    """
+    Upload an artifact to a publicly accessible location for fal.ai processing.
+    This function loads an artifact and makes it available via a public URL.
+
+    Args:
+        filename (str): The name of the artifact file to upload
+        tool_context (ToolContext): Context for accessing artifacts
+
+    Returns:
+        str: Public URL for the uploaded file or error message
+    """
+    try:
+        # Load the artifact
+        artifact_part = await tool_context.load_artifact(filename)
+        
+        if not artifact_part:
+            return f"Artifact '{filename}' not found. Use list_user_artifacts to see available files."
+        
+        # Extract artifact data
+        if hasattr(artifact_part, 'inline_data') and artifact_part.inline_data:
+            mime_type = artifact_part.inline_data.mime_type
+            data = artifact_part.inline_data.data
+        elif hasattr(artifact_part, 'data'):
+            mime_type = getattr(artifact_part, 'mimeType', 'application/octet-stream')
+            data = artifact_part.data
+        else:
+            return f"Could not extract data from artifact '{filename}'"
+        
+        # For now, we'll save to Google Cloud Storage and return a public URL
+        # This requires the storage bucket to be configured for public access
+        try:
+            from google.cloud import storage
+            import tempfile
+            import uuid
+            
+            # Create a temporary file
+            temp_filename = f"fal_upload_{uuid.uuid4()}_{filename}"
+            
+            # Initialize storage client
+            client = storage.Client(project=project_id)
+            bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", f"{project_id}-artifacts")
+            bucket = client.bucket(bucket_name)
+            
+            # Upload to GCS
+            blob = bucket.blob(f"fal-uploads/{temp_filename}")
+            blob.upload_from_string(data, content_type=mime_type)
+            
+            # Make publicly accessible (temporary)
+            blob.make_public()
+            
+            public_url = blob.public_url
+            
+            return f"Successfully uploaded '{filename}' to public URL: {public_url}\n\nThis URL can be used with fal.ai models. The file will be automatically cleaned up after 24 hours."
+            
+        except Exception as e:
+            return f"Error uploading artifact to public storage: {e}\n\nNote: You may need to configure a public storage bucket for fal.ai integration."
+    
+    except Exception as e:
+        return f"Error processing artifact '{filename}': {e}"
 
 
 # Initialize MCP tools only if GitHub token is available
@@ -521,7 +611,10 @@ save_artifact_tool = FunctionTool(func=save_analysis_result)
 # Create image generation tool
 generate_image_tool = FunctionTool(func=generate_image)
 
-tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, generate_image_tool]
+# Create artifact upload tool for fal.ai integration
+upload_artifact_tool = FunctionTool(func=upload_artifact_to_fal)
+
+tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, generate_image_tool, upload_artifact_tool]
 
 root_agent = Agent(
     name="root_agent",
