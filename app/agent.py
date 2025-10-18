@@ -483,37 +483,64 @@ async def upload_artifact_to_fal(filename: str, tool_context: ToolContext) -> st
         str: fal.ai file URL for the uploaded file or error message
     """
     try:
-        # First, try to work around the version issue by using filename without version
-        base_filename = filename
-        if ' v' in filename:
-            base_filename = filename.split(' v')[0]  # Remove version part
-            print(f"DEBUG: Stripped version from filename: '{filename}' -> '{base_filename}'")
+        # Handle version suffixes more robustly
+        # ADK artifact system sometimes appends version like " v1", " v2" etc.
+        # We need to try different variations to find the actual artifact
         
-        # Load the artifact with base filename first
+        possible_filenames = [filename]  # Start with original filename
+        
+        # If filename has version suffix, try without it
+        if ' v' in filename:
+            base_filename = filename.split(' v')[0]
+            possible_filenames.append(base_filename)
+            print(f"DEBUG: Detected version in filename: '{filename}' -> base: '{base_filename}'")
+        
+        # Also try with common version patterns
+        import re
+        version_patterns = [
+            r' v\d+$',      # " v1", " v2", etc.
+            r'_v\d+$',      # "_v1", "_v2", etc.  
+            r' \(\d+\)$',   # " (1)", " (2)", etc.
+        ]
+        
+        for pattern in version_patterns:
+            cleaned = re.sub(pattern, '', filename)
+            if cleaned != filename and cleaned not in possible_filenames:
+                possible_filenames.append(cleaned)
+        
+        print(f"DEBUG: Will try these filenames: {possible_filenames}")
+        
+        # Try loading artifact with different filename variations
         artifact_part = None
-        try:
-            artifact_part = await tool_context.load_artifact(base_filename)
-            print(f"DEBUG: Successfully loaded artifact with base filename: {base_filename}")
-        except Exception as base_error:
-            print(f"DEBUG: Failed to load with base filename '{base_filename}': {base_error}")
-            # Try with original filename
+        successful_filename = None
+        last_error = None
+        
+        for attempt_filename in possible_filenames:
             try:
-                artifact_part = await tool_context.load_artifact(filename)
-                print(f"DEBUG: Successfully loaded artifact with original filename: {filename}")
-            except Exception as orig_error:
-                print(f"DEBUG: Failed to load with original filename '{filename}': {orig_error}")
-                return f"Could not load artifact '{filename}'. Base error: {base_error}. Original error: {orig_error}"
+                print(f"DEBUG: Attempting to load artifact with filename: '{attempt_filename}'")
+                artifact_part = await tool_context.load_artifact(attempt_filename)
+                successful_filename = attempt_filename
+                print(f"DEBUG: ✅ Successfully loaded artifact with filename: '{attempt_filename}'")
+                break
+            except Exception as error:
+                print(f"DEBUG: ❌ Failed to load with filename '{attempt_filename}': {error}")
+                last_error = error
+                continue
+        
+        if artifact_part is None:
+            return f"Could not load artifact '{filename}'. Tried filenames: {possible_filenames}. Last error: {last_error}"
         
         if not artifact_part:
-            return f"Artifact '{filename}' not found. Use list_user_artifacts to see available files."
+            return f"Artifact '{filename}' not found or is empty. Use list_user_artifacts to see available files."
         
-        # Debug: Log the artifact structure to understand the issue
+        # Debug: Log the artifact structure to understand it better
         print(f"DEBUG: artifact_part type: {type(artifact_part)}")
-        print(f"DEBUG: artifact_part attributes: {dir(artifact_part)}")
         if hasattr(artifact_part, '__dict__'):
-            print(f"DEBUG: artifact_part.__dict__: {artifact_part.__dict__}")
+            print(f"DEBUG: artifact_part attributes: {list(artifact_part.__dict__.keys())}")
+        else:
+            print(f"DEBUG: artifact_part dir: {[attr for attr in dir(artifact_part) if not attr.startswith('_')]}")
         
-        # Extract artifact data - be more careful with data extraction
+        # Extract artifact data more carefully
         data = None
         mime_type = 'application/octet-stream'
         
