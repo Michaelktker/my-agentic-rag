@@ -48,7 +48,7 @@ GITHUB_OWNER = "Michaelktker"
 GITHUB_REPO = "my-agentic-rag"
 
 # ADK Endpoint Configuration - Production first, staging fallback
-PRODUCTION_ADK_URL = os.getenv("PRODUCTION_ADK_URL", "https://my-agentic-rag-production.us-central1.run.app")
+PRODUCTION_ADK_URL = os.getenv("PRODUCTION_ADK_URL", "https://my-agentic-rag-638797485217.us-central1.run.app")
 STAGING_ADK_URL = os.getenv("STAGING_ADK_URL", "https://my-agentic-rag-454188184539.us-central1.run.app")
 
 # Health check timeout in seconds
@@ -153,8 +153,43 @@ async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_con
         str: Information about the loaded artifact for analysis
     """
     try:
-        # Load the artifact
-        artifact_part = await tool_context.load_artifact(filename)
+        # Handle potential version suffixes in filename
+        possible_filenames = [filename]
+        
+        # If filename has version suffix, try without it
+        if ' v' in filename:
+            base_filename = filename.split(' v')[0]
+            possible_filenames.append(base_filename)
+        
+        # Also try with common version patterns
+        import re
+        version_patterns = [
+            r' v\d+$',      # " v1", " v2", etc.
+            r'_v\d+$',      # "_v1", "_v2", etc.  
+            r' \(\d+\)$',   # " (1)", " (2)", etc.
+        ]
+        
+        for pattern in version_patterns:
+            cleaned = re.sub(pattern, '', filename)
+            if cleaned != filename and cleaned not in possible_filenames:
+                possible_filenames.append(cleaned)
+        
+        # Try loading artifact with different filename variations
+        artifact_part = None
+        successful_filename = None
+        last_error = None
+        
+        for attempt_filename in possible_filenames:
+            try:
+                artifact_part = await tool_context.load_artifact(attempt_filename)
+                successful_filename = attempt_filename
+                break
+            except Exception as error:
+                last_error = error
+                continue
+        
+        if artifact_part is None:
+            return f"Artifact '{filename}' not found. Tried variations: {possible_filenames}. Last error: {last_error}"
         
         if not artifact_part:
             return f"Artifact '{filename}' not found. Use list_user_artifacts to see available files."
@@ -488,6 +523,7 @@ async def upload_artifact_to_fal(filename: str, tool_context: ToolContext) -> st
         # We need to try different variations to find the actual artifact
         
         possible_filenames = [filename]  # Start with original filename
+        base_filename = filename  # Initialize base_filename with the original filename
         
         # If filename has version suffix, try without it
         if ' v' in filename:
@@ -507,6 +543,8 @@ async def upload_artifact_to_fal(filename: str, tool_context: ToolContext) -> st
             cleaned = re.sub(pattern, '', filename)
             if cleaned != filename and cleaned not in possible_filenames:
                 possible_filenames.append(cleaned)
+                if base_filename == filename:  # Update base_filename if this is the first pattern match
+                    base_filename = cleaned
         
         print(f"DEBUG: Will try these filenames: {possible_filenames}")
         

@@ -29,7 +29,7 @@ const ARTIFACTS_BUCKET_NAME = process.env.ARTIFACTS_BUCKET_NAME || config.gcs.ar
 const PROJECT_ID = process.env.PROJECT_ID || config.gcs.projectId;
 
 // ADK Endpoint Configuration with fallback
-const PRODUCTION_ADK_URL = process.env.PRODUCTION_ADK_URL || 'https://my-agentic-rag-production.us-central1.run.app';
+const PRODUCTION_ADK_URL = process.env.PRODUCTION_ADK_URL || 'https://my-agentic-rag-638797485217.us-central1.run.app';
 const STAGING_ADK_URL = process.env.STAGING_ADK_URL || 'https://my-agentic-rag-454188184539.us-central1.run.app';
 const HEALTH_CHECK_TIMEOUT = parseInt(process.env.HEALTH_CHECK_TIMEOUT || '5000'); // 5 seconds in milliseconds
 
