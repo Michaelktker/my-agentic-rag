@@ -836,8 +836,8 @@ mcp_tools = MCPToolset(
 fal_mcp_tools = MCPToolset(
     connection_params=StdioConnectionParams(
         server_params=StdioServerParameters(
-            command="/home/codespace/.python/current/bin/python3",
-            args=["/workspaces/my-agentic-rag/mcp-fal/main.py"],
+            command="/code/mcp-fal/.venv/bin/python",
+            args=["/code/mcp-fal/main.py"],
             env={"FAL_KEY": os.getenv("FAL_KEY", "")}
         )
     )
