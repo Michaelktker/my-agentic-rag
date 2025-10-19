@@ -464,8 +464,16 @@ User: "Generate a video from this image"
 
 **Return Generated Content URLs:**
 - When generation is complete, always provide the direct URL to the generated content
+- For direct requests, extract the image/video URL from the generate() response
 - For queued requests, extract the final image/video URL from the result() response
 - Include this URL in your response so the WhatsApp bot can share it with the user
+- **CRITICAL**: Always include the actual generated content URL in your final response text
+- Format URLs clearly so they can be easily shared in WhatsApp messages
+
+**Error Handling:**
+- If a model is not found, suggest alternative models or search for similar ones
+- Always provide helpful feedback when operations fail
+- If generation fails, offer to try with different parameters or models
 
 Always be precise and thorough in your fal.ai operations."""
 
@@ -549,6 +557,8 @@ When users provide Google Cloud Storage URLs (format: storage.googleapis.com wit
 - Monitor status and only fetch results when status is COMPLETED
 - Never call generate() multiple times for the same request
 - Share the final generated content URL with users once ready
+- **ENSURE**: Always extract and include the generated content URL in your response to users
+- If fal.ai agent returns without a URL, ask it to check the result and provide the URL
 
 **Image Generation Workflow:**
 1. User requests image generation
