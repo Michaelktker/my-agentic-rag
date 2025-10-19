@@ -44,17 +44,19 @@ A production-ready system that combines:
 **Latest Updates (October 2025)**:
 - 🎨 **Image Generation**: End-to-end image creation using Imagen 3.0 with direct WhatsApp delivery
 - 🚀 **fal.ai MCP Integration**: Successfully integrated 100+ AI models via Model Context Protocol with proper ADK agent architecture
-- 🔧 **fal.ai Artifact Upload**: Fixed critical artifact-to-URL conversion for fal.ai processing with automatic version handling
+- 🔧 **Artifact Public URL Generation**: Complete fix for ADK JSON format artifacts - extracts raw image data and creates publicly accessible URLs
+- 🔗 **make_artifact_public Tool**: New function that converts ADK artifacts to raw images with public GCS URLs for fal.ai integration
+- 🖼️ **Image Display Fix**: Resolved binary data issue - artifacts now display properly as images instead of JSON data
 - 🔐 **Secret Manager Integration**: Automatic FAL_KEY retrieval from Google Secret Manager for seamless production deployment
 - 🗂️ **Artifact Version Fix**: Resolved "invalid literal for int() with base 10: 'v1'" error with intelligent filename processing
 - 🔧 **MCP Architecture**: Resolved `MCPToolset` stdio configuration with `StdioConnectionParams` and `StdioServerParameters`
 - 🧠 **Advanced AI Models**: Access to FLUX, video generation, upscaling, and style transfer through fal.ai
-- 🔧 **Artifact System**: Completely fixed GCS artifact loading with architectural improvements
+- 🔧 **Server Stability**: Fixed asyncio session issues, MCP path configuration, and agent tool execution
 - 📱 **WhatsApp Integration**: Seamless image delivery with proper Baileys format support
 - 🚀 **Performance**: Optimized artifact processing with session-scoped storage paths
 - 🛠️ **Architecture Fix**: Resolved duplicate artifact service instantiation issues
 - 🗂️ **Path Compatibility**: Fixed path structure mismatch between WhatsApp bot and ADK Runner
-- ✅ **Production Stability**: Comprehensive debugging and error handling improvements
+- ✅ **Production Stability**: Comprehensive testing confirms all systems working - health checks passing, tool execution verified, public URLs accessible
 - 🐳 **Deployment Ready**: Fixed Docker configuration, MCP paths, and environment variables for production deployment
 
 ## 🏗️ Architecture
@@ -487,6 +489,51 @@ The system automatically handles Microsoft Office documents that are not nativel
 - ✅ XLSX → CSV (automatic conversion)
 - ✅ DOCX → Text (automatic conversion)
 - 🎨 **Image Generation**: Vertex AI Imagen 3.0 (PNG, 1024x1024, optimized for WhatsApp)
+
+### Artifact Public URL Generation
+
+A critical breakthrough for fal.ai integration - the system can now convert ADK artifacts to publicly accessible image URLs:
+
+#### ✅ **make_artifact_public Tool (October 2025)**
+
+**The Challenge**: ADK stores artifacts in JSON format with image data as byte arrays, making them unusable as direct image URLs for fal.ai models.
+
+**The Solution**: Our `make_artifact_public` function automatically:
+- **Detects ADK JSON Format**: Identifies artifacts stored in ADK's JSON wrapper format
+- **Extracts Raw Image Data**: Converts byte array data back to actual image files
+- **Creates Public URLs**: Generates publicly accessible GCS URLs for direct use
+- **Optimizes for fal.ai**: URLs work seamlessly with all fal.ai models and workflows
+
+**Technical Implementation**:
+```python
+# Before: ADK JSON format (3.3 MB)
+{
+  "mimeType": "image/jpeg",
+  "data": {
+    "__buffer_type": true,
+    "data": [255, 216, 255, 224, ...]  # Byte array
+  }
+}
+
+# After: Raw image file (316.5 KB) with public URL
+https://storage.googleapis.com/bucket/path/image_raw.jpg
+```
+
+**User Experience**:
+```
+User: "Make my uploaded image public for fal.ai processing"
+Bot: ✅ Successfully made 'image.jpg' public!
+     🔗 Public URL: https://storage.googleapis.com/...image_raw.jpg
+     📊 File details: JPEG, 316.5 KB
+     🎯 Ready for fal_mcp_agent use!
+```
+
+**Key Benefits**:
+- **Format Conversion**: ADK JSON → Raw image files
+- **Size Optimization**: Significantly smaller file sizes (JSON overhead removed)
+- **Direct Compatibility**: URLs work immediately with fal.ai models
+- **Automatic Processing**: No manual intervention required
+- **Production Ready**: Handles GCS uniform bucket-level access policies
 
 ### Storage Architecture
 ```

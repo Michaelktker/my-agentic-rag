@@ -15,11 +15,11 @@
 # mypy: disable-error-code="arg-type"
 # Full deployment test - October 3, 2025 - Testing complete CI/CD pipeline
 import os
-import time
 import base64
 import uuid
 import asyncio
 import aiohttp
+import json
 from io import BytesIO
 
 import google
@@ -33,7 +33,7 @@ from google.adk.tools import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 from langchain_google_vertexai import VertexAIEmbeddings
-from vertexai.preview.vision_models import ImageGenerationModel
+
 
 from app.retrievers import get_compressor, get_retriever
 from app.templates import format_docs
@@ -171,15 +171,30 @@ async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_con
         # Get user ID from tool context if available
         # For WhatsApp users, this will be something like: 6592377976@s.whatsapp.net
         user_id = getattr(tool_context, 'user_id', None)
+        session_id = getattr(tool_context, 'session_id', '')
+        
+        # Debug logging for troubleshooting - check all tool_context attributes
+        print(f"DEBUG load_artifact: Tool context type: {type(tool_context)}")
+        print(f"DEBUG load_artifact: Tool context attributes: {dir(tool_context)}")
+        print(f"DEBUG load_artifact: Tool context user_id: {user_id}")
+        print(f"DEBUG load_artifact: Tool context session_id: {session_id}")
+        
+        # Try alternative ways to get user information from tool context
         if not user_id:
-            # Try to get from context metadata or session info
-            session_id = getattr(tool_context, 'session_id', '')
-            if session_id and session_id.startswith('wa_'):
-                # Extract user ID from WhatsApp session data - we need to search all users
-                # Since we can't determine the exact user, we'll search across all app/ subdirectories
-                user_id = '*'  # Wildcard to search all users
-            else:
-                user_id = 'unknown_user'
+            # Check if there's a different attribute name
+            for attr in ['userId', 'user', '_user_id', 'current_user']:
+                if hasattr(tool_context, attr):
+                    alt_user = getattr(tool_context, attr)
+                    print(f"DEBUG load_artifact: Found alternative user attribute '{attr}': {alt_user}")
+                    if alt_user:
+                        user_id = alt_user
+                        break
+        
+        if not user_id:
+            # Always search across all users if we can't determine the specific user
+            # This is more reliable than trying to guess the user ID
+            user_id = '*'  # Wildcard to search all users
+            print(f"DEBUG load_artifact: No user_id found, using wildcard search")
         
         # Search for the artifact across all sessions for this user
         # Path pattern: app/{user_id}/{session_id}/{filename}/{version}
@@ -345,75 +360,7 @@ async def save_analysis_result(filename: str, analysis_content: str, tool_contex
         return f"An unexpected error occurred while saving analysis: {e}"
 
 
-async def generate_image(prompt: str, tool_context: ToolContext) -> str:
-    """
-    Generate an image using Vertex AI Imagen model.
-    The generated image will be included directly in the agent's response.
 
-    Args:
-        prompt (str): Detailed description of the image to generate
-        tool_context (ToolContext): Context for adding image to conversation
-
-    Returns:
-        str: Success message with generation details
-    """
-    try:
-        # Initialize the latest Imagen model
-        model = ImageGenerationModel.from_pretrained("imagen-3.0-generate-001")
-        
-        # Generate the image with optimized parameters for WhatsApp
-        images = model.generate_images(
-            prompt=prompt,
-            number_of_images=1,
-            language="en",
-            aspect_ratio="1:1",  # Square format works well for WhatsApp
-            safety_filter_level="allow_most",
-            person_generation="allow_adult"
-        )
-        
-        if not images:
-            return "Failed to generate image. Please try a different prompt."
-        
-        # Get the generated image
-        generated_image = images[0]
-        
-        # Convert Vertex AI GeneratedImage to bytes
-        img_bytes = generated_image._image_bytes
-        
-        # Create filename for artifact storage
-        timestamp = int(time.time())
-        filename = f"generated_image_{timestamp}.png"
-        
-        # Create Part object for the image
-        image_part = types.Part.from_bytes(data=img_bytes, mime_type="image/png")
-        
-        # Save as artifact - this makes it available for the agent's response
-        version = await tool_context.save_artifact(filename, image_part)
-        
-        # Calculate file size
-        size_mb = len(img_bytes) / (1024 * 1024)
-        
-        return f"""✅ Successfully generated image: "{prompt}"
-
-📁 Saved as: {filename} (version {version})  
-📏 Size: {size_mb:.1f} MB
-🖼️ Format: PNG (1024x1024)
-🎨 Model: Imagen 3.0
-
-The image has been generated and saved as an artifact. You can now include this image in your response to the user by referencing the artifact '{filename}'."""
-        
-    except Exception as e:
-        error_msg = str(e)
-        
-        # Handle common errors with helpful messages
-        if "safety" in error_msg.lower():
-            return f"❌ Image generation blocked by safety filters. Please try a different prompt that doesn't include potentially harmful content.\n\nOriginal prompt: {prompt}"
-        elif "quota" in error_msg.lower() or "limit" in error_msg.lower():
-            return "❌ Image generation quota exceeded. Please try again later or contact support."
-        elif "invalid" in error_msg.lower():
-            return f"❌ Invalid prompt for image generation. Please provide a more descriptive prompt.\n\nOriginal prompt: {prompt}"
-        else:
-            return f"❌ Error generating image: {error_msg}\n\nPlease try a different prompt or contact support if the issue persists."
 
 
 # Web search agent prompt
@@ -490,9 +437,9 @@ Common fal.ai models you can use:
 
 **For Image-to-Video Generation:**
 - If the user uploads an image and wants to generate a video from it
-- Ask the main agent to first load and provide the image artifact
-- You may need the image to be saved to a publicly accessible URL for fal.ai to process
-- Work with the main agent to handle this workflow
+- Ask the main agent to first make the artifact publicly accessible using `make_artifact_public`
+- The main agent will provide a public GCS URL that you can use directly with fal.ai models
+- Use the public URL with models like Seedance for image-to-video generation
 
 Always be precise and thorough in your fal.ai operations."""
 
@@ -513,19 +460,18 @@ You have access to several specialized capabilities:
    - list_user_artifacts: See what media files users have uploaded
    - load_and_analyze_artifact: Load and analyze specific media files
    - save_analysis_result: Save your analysis results back as artifacts
-   - upload_artifact_to_fal: Upload artifacts to public URLs for fal.ai processing
-6. **Image generation** using Vertex AI Imagen:
-   - generate_image: Create images from detailed text descriptions
+   - make_artifact_public: Make GCS artifacts publicly accessible for fal.ai processing
 
 **Image Generation Guidelines:**
-- You now have TWO image generation options:
-  1. **Vertex AI Imagen** (generate_image): Google's high-quality image generation
-  2. **fal.ai models** (via fal.ai agent): Various cutting-edge models like Flux, SDXL
-- For advanced or specialized image generation, consider using fal.ai models
-- For quick, reliable generation, use Vertex AI Imagen
-- When users request image creation, choose the most appropriate method
-- Generated images are automatically included in your response AND saved as artifacts
-- Handle safety filter rejections gracefully with alternative suggestions
+- **All image generation is handled through fal.ai models** via the fal.ai agent
+- Available models include: Flux Dev/Schnell, SDXL, Stable Diffusion, and many others
+- Use the fal.ai agent to discover available models with the `models` tool
+- Check model schemas before generation to understand required parameters
+- For quick generation: Use "fal-ai/flux/schnell" 
+- For high-quality generation: Use "fal-ai/flux/dev"
+- For specialized styles: Explore other available models through the fal.ai agent
+- Generated images are automatically saved as artifacts and included in responses
+- Handle generation errors gracefully with alternative model suggestions
 
 **fal.ai Generation Capabilities:**
 - **Image Generation**: Use models like "fal-ai/flux/dev" for high-quality images
@@ -544,7 +490,7 @@ You have access to several specialized capabilities:
 When users upload an image and want to use it with fal.ai models (especially for image-to-video):
 1. First, use `list_user_artifacts` to see available files
 2. Use `load_and_analyze_artifact` to analyze the image if needed
-3. **IMPORTANT**: Use `upload_artifact_to_fal` to create a public URL for the image
+3. **IMPORTANT**: Use `make_artifact_public` to create a public GCS URL for the image
 4. Provide this public URL to the fal.ai agent for processing
 5. The fal.ai agent can then use this URL with models like Seedance for image-to-video generation
 
@@ -552,52 +498,55 @@ When users upload an image and want to use it with fal.ai models (especially for
 1. First use `list_user_artifacts` to see what files are available
 2. Use `load_and_analyze_artifact` to load specific files for analysis
 3. Provide detailed analysis using your multimodal capabilities
-4. If using with fal.ai, use `upload_artifact_to_fal` to create public URLs
+4. If using with fal.ai, use `make_artifact_public` to create public GCS URLs
 5. Optionally save analysis results using `save_analysis_result`
 
 **When users request image/video generation:**
-1. For images: Choose between Vertex AI Imagen or fal.ai models based on requirements
-2. For videos: Use the fal.ai agent with appropriate video generation models
-3. For image-to-video: Use `upload_artifact_to_fal` first, then fal.ai agent with the URL
-4. For specialized effects or styles: Consider fal.ai's diverse model ecosystem
+1. **For images**: Use the fal.ai agent with appropriate models (Flux, SDXL, etc.)
+2. **For videos**: Use the fal.ai agent with video generation models
+3. **For image-to-video**: Use `make_artifact_public` first, then fal.ai agent with the URL
+4. **For specialized effects**: Explore fal.ai's diverse model ecosystem through model discovery
 5. Always provide detailed, descriptive prompts for better results
-6. Handle errors gracefully and suggest alternatives if generation fails
+6. Handle errors gracefully and suggest alternative models if generation fails
+
+**Image Generation Workflow:**
+1. User requests image generation
+2. Use fal.ai agent to generate with appropriate model
+3. fal.ai agent handles the generation and saves as artifact
+4. Image is included in response to user
 
 **Important Notes:**
-- You can ANALYZE existing media AND GENERATE new content via multiple AI services
+- You can ANALYZE existing media AND GENERATE new content via fal.ai services
 - Generated content is included directly in responses AND saved as artifacts
 - The Gemini 2.5 Flash model you're powered by can directly analyze multimodal content
 - When artifacts are loaded, their content becomes available in the conversation context
 - Always provide comprehensive, detailed analysis of media files
-- For fal.ai image-to-video generation, you MUST first upload the image to a public URL
+- For fal.ai image-to-video generation, you MUST first make the image publicly accessible via GCS URL
+- **Public GCS URLs are permanent - be mindful of sensitive content**
+- **All image generation is now handled exclusively through fal.ai models**
 
 GitHub agent works with repository: {GITHUB_OWNER}/{GITHUB_REPO} by default.
 Use web search for current information not in your knowledge base.
-Use fal.ai agent for advanced AI content generation capabilities.
+Use fal.ai agent for all AI content generation capabilities including images and videos.
 
-Updated: Added artifact-to-URL upload for fal.ai integration - 2025-10-18"""
+Updated: Removed Vertex AI Imagen, using fal.ai exclusively for all generation - 2025-10-19"""
 
 
-async def upload_artifact_to_fal(filename: str, tool_context: ToolContext) -> str:
+async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
     """
-    Upload an artifact to fal.ai storage for processing with fal.ai models.
-    This function loads an artifact, saves it temporarily, and uploads it to fal.ai's CDN.
+    Make an artifact publicly accessible via GCS public URL.
+    This creates a direct public URL that can be used with fal.ai models.
 
     Args:
-        filename (str): The name of the artifact file to upload
+        filename (str): The name of the artifact file to make public
         tool_context (ToolContext): Context for accessing artifacts
 
     Returns:
-        str: fal.ai file URL for the uploaded file or error message
+        str: Public GCS URL or error message
     """
     try:
-        # CRITICAL FIX: Session ID mismatch issue - same as load_and_analyze_artifact
-        # Use direct GCS access to find artifacts across all sessions for this user
-        
         from google.cloud import storage
         import json
-        import base64
-        import tempfile
         
         # Get bucket from environment or default
         artifacts_bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
@@ -606,29 +555,43 @@ async def upload_artifact_to_fal(filename: str, tool_context: ToolContext) -> st
         
         # Get user ID from tool context if available
         user_id = getattr(tool_context, 'user_id', None)
+        session_id = getattr(tool_context, 'session_id', '')
+        
+        # Debug logging for troubleshooting - check all tool_context attributes
+        print(f"DEBUG: Tool context type: {type(tool_context)}")
+        print(f"DEBUG: Tool context attributes: {dir(tool_context)}")
+        print(f"DEBUG: Tool context user_id: {user_id}")
+        print(f"DEBUG: Tool context session_id: {session_id}")
+        
+        # Try alternative ways to get user information from tool context
         if not user_id:
-            # Try to get from context metadata or session info
-            session_id = getattr(tool_context, 'session_id', '')
-            if session_id and session_id.startswith('wa_'):
-                # Extract user ID from WhatsApp session data - we need to search all users
-                # Since we can't determine the exact user, we'll search across all app/ subdirectories
-                user_id = '*'  # Wildcard to search all users
-            else:
-                user_id = 'unknown_user'
+            # Check if there's a different attribute name
+            for attr in ['userId', 'user', '_user_id', 'current_user']:
+                if hasattr(tool_context, attr):
+                    alt_user = getattr(tool_context, attr)
+                    print(f"DEBUG: Found alternative user attribute '{attr}': {alt_user}")
+                    if alt_user:
+                        user_id = alt_user
+                        break
+        
+        if not user_id:
+            # Always search across all users if we can't determine the specific user
+            # This is more reliable than trying to guess the user ID
+            user_id = '*'  # Wildcard to search all users
+            print(f"DEBUG: No user_id found, using wildcard search")
         
         # Search for the artifact across all sessions for this user
         if user_id == '*':
             # Search across all users if we can't determine the specific user
             prefix = "app/"
-            print(f"DEBUG: upload_artifact_to_fal - Searching for artifact '{filename}' across all users with prefix '{prefix}'")
+            print(f"DEBUG: Searching for artifact '{filename}' across all users with prefix '{prefix}'")
         else:
             prefix = f"app/{user_id}/"
-            print(f"DEBUG: upload_artifact_to_fal - Searching for artifact '{filename}' for user '{user_id}' with prefix '{prefix}'")
+            print(f"DEBUG: Searching for artifact '{filename}' for user '{user_id}' with prefix '{prefix}'")
         
         # List all blobs with this prefix to find sessions containing our artifact
         blobs = bucket.list_blobs(prefix=prefix)
-        artifact_found = None
-        found_path = None
+        found_blob = None
         
         for blob in blobs:
             # Extract the path components
@@ -643,141 +606,143 @@ async def upload_artifact_to_fal(filename: str, tool_context: ToolContext) -> st
                     filename.startswith(found_filename)):
                     
                     print(f"DEBUG: Found potential match: {blob.name}")
-                    
-                    # Try to download and parse this artifact
-                    try:
-                        data = blob.download_as_bytes()
-                        
-                        # Check if it's JSON (our artifact format) or raw data
-                        try:
-                            artifact_data = json.loads(data.decode('utf-8'))
-                            if 'data' in artifact_data and 'mimeType' in artifact_data:
-                                # This is our JSON-wrapped artifact format
-                                artifact_found = {
-                                    'data': artifact_data['data'],
-                                    'mimeType': artifact_data['mimeType'],
-                                    'inline_data': {
-                                        'mime_type': artifact_data['mimeType'],
-                                        'data': artifact_data['data']
-                                    }
-                                }
-                                found_path = blob.name
-                                print(f"DEBUG: ✅ Successfully loaded artifact from: {found_path}")
-                                break
-                        except (json.JSONDecodeError, UnicodeDecodeError):
-                            # This might be raw binary data (ADK format)
-                            artifact_found = {
-                                'data': base64.b64encode(data).decode('utf-8'),
-                                'mimeType': 'application/octet-stream',  # Default, will be updated
-                                'inline_data': {
-                                    'mime_type': 'application/octet-stream',
-                                    'data': base64.b64encode(data).decode('utf-8')
-                                }
-                            }
-                            found_path = blob.name
-                            print(f"DEBUG: ✅ Successfully loaded raw artifact from: {found_path}")
-                            break
-                            
-                    except Exception as blob_error:
-                        print(f"DEBUG: Failed to load blob {blob.name}: {blob_error}")
-                        continue
+                    found_blob = blob
+                    break
         
-        if not artifact_found:
-            # Fallback: try the original ADK load_artifact method
-            print(f"DEBUG: Direct GCS search failed, trying ADK tool_context.load_artifact()")
-            try:
-                artifact_part = await tool_context.load_artifact(filename)
-                if artifact_part:
-                    artifact_found = artifact_part
-                    found_path = f"ADK_context:{filename}"
-                    print(f"DEBUG: ✅ Loaded via tool_context: {found_path}")
-            except Exception as context_error:
-                print(f"DEBUG: tool_context.load_artifact also failed: {context_error}")
+        if not found_blob:
+            return f"Artifact '{filename}' not found in GCS. Searched prefix: '{prefix}'"
         
-        if not artifact_found:
-            return f"Could not load artifact '{filename}' for fal.ai upload. Searched prefix: '{prefix}'"
-        
-        print(f"DEBUG: artifact_found type: {type(artifact_found)}")
-        
-        # Extract data for upload
-        file_data = None
-        mime_type = None
-        
-        if isinstance(artifact_found, dict):
-            # Our dictionary format
-            file_data = artifact_found.get('data')
-            mime_type = artifact_found.get('mimeType')
-            if artifact_found.get('inline_data'):
-                file_data = artifact_found['inline_data'].get('data') or file_data
-                mime_type = artifact_found['inline_data'].get('mime_type') or mime_type
-        elif hasattr(artifact_found, 'inline_data') and artifact_found.inline_data:
-            # ADK Part format
-            file_data = artifact_found.inline_data.data
-            mime_type = artifact_found.inline_data.mime_type
-        elif hasattr(artifact_found, 'data'):
-            # Direct data access
-            file_data = artifact_found.data
-            mime_type = getattr(artifact_found, 'mimeType', 'application/octet-stream')
-        
-        if not file_data:
-            return f"Artifact '{filename}' was found but contains no data"
-        
-        print(f"DEBUG: Extracted data length: {len(file_data) if file_data else 0}, mime_type: {mime_type}")
-        
-        # Decode base64 data if needed
+        # Check if this is an ADK JSON format file and extract raw image data
         try:
-            if isinstance(file_data, str):
-                binary_data = base64.b64decode(file_data)
-            else:
-                binary_data = file_data
-        except Exception as decode_error:
-            return f"Failed to decode artifact data: {decode_error}"
-        
-        # Determine file extension from mime type
-        file_extension = ".bin"  # Default
-        if mime_type:
-            if mime_type.startswith("image/jpeg"):
-                file_extension = ".jpg"
-            elif mime_type.startswith("image/png"):
-                file_extension = ".png"
-            elif mime_type.startswith("image/webp"):
-                file_extension = ".webp"
-            elif mime_type.startswith("image/gif"):
-                file_extension = ".gif"
-            elif mime_type.startswith("video/mp4"):
-                file_extension = ".mp4"
-            elif mime_type.startswith("audio/"):
-                file_extension = ".mp3"
-            elif mime_type.startswith("application/pdf"):
-                file_extension = ".pdf"
-        
-        # Create temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
-            temp_file.write(binary_data)
-            temp_file_path = temp_file.name
-        
-        try:
-            # Now upload to fal.ai
-            import fal_client
+            # Download the content to check format
+            content = found_blob.download_as_bytes()
             
-            print(f"DEBUG: Uploading {len(binary_data)} bytes to fal.ai...")
-            url = fal_client.upload_file(temp_file_path)
-            print(f"DEBUG: ✅ Successfully uploaded to fal.ai: {url}")
-            
-            return f"✅ Successfully uploaded '{filename}' to fal.ai!\n\n🔗 **fal.ai URL**: {url}\n\nYou can now use this URL with fal.ai models for:\n- Image-to-video generation\n- Advanced image processing\n- AI model workflows\n\nFile details:\n- Type: {mime_type}\n- Size: {len(binary_data)} bytes\n- Source: {found_path}"
-            
-        except Exception as upload_error:
-            return f"Failed to upload '{filename}' to fal.ai: {upload_error}"
-        
-        finally:
-            # Clean up temporary file
             try:
-                os.unlink(temp_file_path)
-            except:
-                pass
+                # Try to parse as ADK JSON format
+                artifact_data = json.loads(content.decode('utf-8'))
                 
+                if 'data' in artifact_data and isinstance(artifact_data['data'], dict) and artifact_data['data'].get('__buffer_type'):
+                    # This is ADK format with byte array data
+                    print(f"DEBUG: Found ADK format artifact, extracting raw image data")
+                    
+                    # Extract the raw image bytes
+                    byte_array = artifact_data['data']['data']
+                    raw_image_data = bytes(byte_array)
+                    
+                    # Get the mime type
+                    mime_type = artifact_data.get('mimeType', 'image/jpeg')
+                    
+                    # Create a new blob for the raw image
+                    raw_filename = filename.replace('.jpg', '_raw.jpg').replace('.png', '_raw.png')
+                    if not raw_filename.endswith(('.jpg', '.png', '.jpeg')):
+                        raw_filename += '_raw.jpg'
+                    
+                    # Create path for raw image (same structure but with _raw suffix)
+                    raw_blob_name = found_blob.name.replace(filename, raw_filename)
+                    raw_blob = bucket.blob(raw_blob_name)
+                    
+                    # Upload the raw image data
+                    raw_blob.upload_from_string(raw_image_data, content_type=mime_type)
+                    print(f"DEBUG: ✅ Created raw image blob: {raw_blob_name}")
+                    
+                    # Now make the raw image public
+                    try:
+                        raw_blob.make_public()
+                        public_url = raw_blob.public_url
+                        print(f"DEBUG: ✅ Successfully made raw image public: {raw_blob.name}")
+                    except Exception as public_error:
+                        print(f"DEBUG: make_public() failed for raw image: {public_error}")
+                        # Set bucket-level public access if needed
+                        try:
+                            policy = bucket.get_iam_policy(requested_policy_version=3)
+                            binding = {
+                                "role": "roles/storage.objectViewer",
+                                "members": ["allUsers"]
+                            }
+                            
+                            binding_exists = False
+                            for existing_binding in policy.bindings:
+                                if (existing_binding["role"] == binding["role"] and 
+                                    "allUsers" in existing_binding.get("members", [])):
+                                    binding_exists = True
+                                    break
+                            
+                            if not binding_exists:
+                                policy.bindings.append(binding)
+                                bucket.set_iam_policy(policy)
+                                print(f"DEBUG: ✅ Set bucket-level public access")
+                            
+                            public_url = raw_blob.public_url
+                            print(f"DEBUG: ✅ Generated public URL for raw image")
+                            
+                        except Exception as bucket_error:
+                            print(f"DEBUG: Bucket policy failed: {bucket_error}")
+                            public_url = raw_blob.media_link
+                    
+                    # Update found_blob reference for the response
+                    found_blob = raw_blob
+                    
+                else:
+                    # Not ADK format, treat as regular blob
+                    print(f"DEBUG: Not ADK format, making original blob public")
+                    raise ValueError("Not ADK format")
+                    
+            except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+                # Not JSON or not ADK format, make the original blob public
+                print(f"DEBUG: File is not ADK JSON format, making original blob public")
+                
+                try:
+                    found_blob.make_public()
+                    public_url = found_blob.public_url
+                    print(f"DEBUG: ✅ Successfully made original blob public: {found_blob.name}")
+                except Exception as public_error:
+                    print(f"DEBUG: make_public() failed: {public_error}")
+                    # Set bucket-level public access
+                    try:
+                        policy = bucket.get_iam_policy(requested_policy_version=3)
+                        binding = {
+                            "role": "roles/storage.objectViewer",
+                            "members": ["allUsers"]
+                        }
+                        
+                        binding_exists = False
+                        for existing_binding in policy.bindings:
+                            if (existing_binding["role"] == binding["role"] and 
+                                "allUsers" in existing_binding.get("members", [])):
+                                binding_exists = True
+                                break
+                        
+                        if not binding_exists:
+                            policy.bindings.append(binding)
+                            bucket.set_iam_policy(policy)
+                            print(f"DEBUG: ✅ Set bucket-level public access")
+                        
+                        public_url = found_blob.public_url
+                        print(f"DEBUG: ✅ Generated public URL via bucket policy")
+                        
+                    except Exception as bucket_error:
+                        print(f"DEBUG: Bucket policy failed: {bucket_error}")
+                        public_url = found_blob.media_link
+                
+        except Exception as e:
+            return f"Error making artifact '{filename}' public: {e}"
+        
+        # Get file info for the response
+        mime_type = found_blob.content_type or "unknown"
+        size_bytes = found_blob.size or 0
+        
+        # Format size
+        if size_bytes > 1024 * 1024:
+            size_str = f"{size_bytes / (1024 * 1024):.1f} MB"
+        elif size_bytes > 1024:
+            size_str = f"{size_bytes / 1024:.1f} KB"
+        else:
+            size_str = f"{size_bytes} bytes"
+        
+        return f"✅ Successfully made '{filename}' public!\n\n🔗 **Public URL**: {public_url}\n\nThis URL can now be used directly with fal.ai models for:\n- Image-to-video generation\n- Advanced image processing\n- AI model workflows\n\nFile details:\n- Type: {mime_type}\n- Size: {size_str}\n- GCS Path: {found_blob.name}\n\n**Ready for fal_mcp_agent use!**"
+        
     except Exception as e:
-        return f"Error uploading artifact '{filename}' to fal.ai: {e}"
+        return f"Error making artifact '{filename}' public: {e}"
 
 
 async def check_endpoint_health(url: str, timeout: int = HEALTH_CHECK_TIMEOUT) -> bool:
@@ -870,8 +835,8 @@ mcp_tools = MCPToolset(
 fal_mcp_tools = MCPToolset(
     connection_params=StdioConnectionParams(
         server_params=StdioServerParameters(
-            command="/code/mcp-fal/.venv/bin/python",
-            args=["/code/mcp-fal/main.py"],
+            command="/home/codespace/.python/current/bin/python3",
+            args=["/workspaces/my-agentic-rag/mcp-fal/main.py"],
             env={"FAL_KEY": os.getenv("FAL_KEY", "")}
         )
     )
@@ -915,13 +880,12 @@ list_artifacts_tool = FunctionTool(func=list_user_artifacts)
 load_artifact_tool = FunctionTool(func=load_and_analyze_artifact)
 save_artifact_tool = FunctionTool(func=save_analysis_result)
 
-# Create image generation tool
-generate_image_tool = FunctionTool(func=generate_image)
 
-# Create artifact upload tool for fal.ai integration
-upload_artifact_tool = FunctionTool(func=upload_artifact_to_fal)
 
-tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, generate_image_tool, upload_artifact_tool]
+# Create artifact public URL tool for fal.ai integration
+make_public_tool = FunctionTool(func=make_artifact_public)
+
+tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, make_public_tool]
 
 root_agent = Agent(
     name="root_agent",
