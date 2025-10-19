@@ -441,6 +441,8 @@ Common fal.ai models you can use:
 - Ask the main agent to first make the artifact publicly accessible using `make_artifact_public`
 - The main agent will provide a public GCS URL that you can use directly with fal.ai models
 - Use the public URL with models like Seedance for image-to-video generation
+- **IMPORTANT**: Google Cloud Storage URLs with format `storage.googleapis.com/...?alt=media` are already publicly accessible and can be used directly
+- Don't reject URLs just because they contain query parameters like `generation=...&alt=media` - these are valid public URLs
 
 Always be precise and thorough in your fal.ai operations."""
 
@@ -494,6 +496,13 @@ When users upload an image and want to use it with fal.ai models (especially for
 3. **IMPORTANT**: Use `make_artifact_public` to create a public GCS URL for the image
 4. Provide this public URL to the fal.ai agent for processing
 5. The fal.ai agent can then use this URL with models like Seedance for image-to-video generation
+
+**Accepting External Image URLs:**
+When users provide Google Cloud Storage URLs (format: storage.googleapis.com with alt=media parameter):
+- These URLs are already publicly accessible and work directly with fal.ai models
+- You can pass these URLs directly to the fal.ai agent without needing make_artifact_public
+- Example valid format: https://storage.googleapis.com/.../file.jpg?generation=...&alt=media
+- Only use make_artifact_public when the image is uploaded as an artifact to the current session
 
 **When users upload media files through WhatsApp:**
 1. First use `list_user_artifacts` to see what files are available
