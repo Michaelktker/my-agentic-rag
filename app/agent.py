@@ -444,6 +444,29 @@ Common fal.ai models you can use:
 - **IMPORTANT**: Google Cloud Storage URLs with format `storage.googleapis.com/...?alt=media` are already publicly accessible and can be used directly
 - Don't reject URLs just because they contain query parameters like `generation=...&alt=media` - these are valid public URLs
 
+**CRITICAL: Queue Management Workflow (AVOID LOOPS)**
+When using queued generation (for videos, complex images, etc.):
+1. **CALL generate() ONLY ONCE** with queue=True - this returns status_url, response_url, cancel_url
+2. **Use status()** with the status_url to check progress (IN_PROGRESS, COMPLETED, etc.)
+3. **Use result()** with the response_url ONLY when status shows COMPLETED
+4. **NEVER call generate() multiple times** for the same request - this creates duplicate jobs
+5. **Wait and poll status** - don't immediately call result() before checking status
+
+**Example Queue Workflow:**
+```
+User: "Generate a video from this image"
+1. generate(model="fal-ai/wan-pro/image-to-video", parameters={...}, queue=True)
+   Returns: {"status_url": "...", "response_url": "...", "cancel_url": "..."}
+2. status(status_url) → {"status": "IN_PROGRESS", ...}
+3. [Wait] → status(status_url) → {"status": "COMPLETED", ...}
+4. result(response_url) → Final video result
+```
+
+**Return Generated Content URLs:**
+- When generation is complete, always provide the direct URL to the generated content
+- For queued requests, extract the final image/video URL from the result() response
+- Include this URL in your response so the WhatsApp bot can share it with the user
+
 Always be precise and thorough in your fal.ai operations."""
 
 instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis, PLUS image generation via multiple sources.
@@ -518,6 +541,14 @@ When users provide Google Cloud Storage URLs (format: storage.googleapis.com wit
 4. **For specialized effects**: Explore fal.ai's diverse model ecosystem through model discovery
 5. Always provide detailed, descriptive prompts for better results
 6. Handle errors gracefully and suggest alternative models if generation fails
+7. **For queued operations**: Use proper queue workflow - generate once, check status, get result
+8. **Always share the final content URL** with the user when generation is complete
+
+**Queue Management for Long-Running Tasks:**
+- Video generation and complex image operations should use queue=True
+- Monitor status and only fetch results when status is COMPLETED
+- Never call generate() multiple times for the same request
+- Share the final generated content URL with users once ready
 
 **Image Generation Workflow:**
 1. User requests image generation
