@@ -91,9 +91,9 @@ def health_check() -> dict[str, str]:
     import datetime
     return {
         "status": "healthy", 
-        "message": "CI/CD pipeline test - Secret Manager permissions fixed!", 
+        "message": "Webhook system deployed - video generation callbacks enabled!", 
         "timestamp": datetime.datetime.now().isoformat(),
-        "version": "v1.2"
+        "version": "v1.3"
     }
 
 @app.get("/version")
