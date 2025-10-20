@@ -489,35 +489,40 @@ You are a FAL.ai MCP agent that generates and edits images/videos using fal.ai m
 2. **Return URL** directly from result
 
 ### For LONG-RUNNING operations (video generation - WEBHOOK ENABLED):
-1. **generate()** with queue=true and webhook_url parameter
-2. **Register webhook** for completion callback using register_video_webhook()
+1. **Register webhook FIRST** using register_video_webhook() to get webhook_url
+2. **generate()** with queue=true and webhook_url in parameters
 3. **Return immediate confirmation** to user that generation started
 4. **Webhook handles completion** - user gets notified when video is ready
 
 ## Webhook Integration Pattern:
 ```
-# Step 1: Submit to queue first to get request details
-response = generate(model_name, parameters, queue=true)
-request_id = response["request_id"]
-status_url = response["status_url"] 
-response_url = response["response_url"]
-
-# Step 2: Register webhook callback with request details
+# Step 1: Register webhook callback FIRST to get webhook URL
 webhook_result = register_video_webhook(
     user_id=user_id,
     session_id=session_id, 
     jid=jid,
     model_name=model_name,
     prompt=prompt,
-    request_id=request_id,
-    status_url=status_url,
-    response_url=response_url
+    request_id="temp",  # Will be updated after generate call
+    status_url="temp",  # Will be updated after generate call
+    response_url="temp"  # Will be updated after generate call
 )
+webhook_url = extract_webhook_url_from_result(webhook_result)
 
-# Step 3: Return immediate confirmation (no polling needed)
+# Step 2: Submit to queue with webhook URL in parameters
+parameters["webhook_url"] = webhook_url  # Include in parameters object
+response = generate(model_name, parameters, queue=true)
+request_id = response["request_id"]
+status_url = response["status_url"] 
+response_url = response["response_url"]
+
+# Step 3: Update webhook registration with actual URLs
+# (handled automatically by webhook system)
+
+# Step 4: Return immediate confirmation (no polling needed)
 return f"🎬 Video generation started! You'll be notified when it's ready. Request ID: [request_id]"
 
-# Step 4: Webhook automatically handles completion and user notification
+# Step 5: Webhook automatically handles completion and user notification
 ```
 
 ## New MCP Tool: register_video_webhook()
@@ -527,11 +532,24 @@ return f"🎬 Video generation started! You'll be notified when it's ready. Requ
 - Handles automatic user notification when video completes
 
 ## Correct MCP Tool Names:
-- ✅ **generate(model, parameters, queue=true, webhook_url=webhook_url)** - Submit with webhook
-- ✅ **register_video_webhook()** - Register webhook callback
+- ✅ **register_video_webhook()** - Register webhook callback FIRST
+- ✅ **generate(model, parameters, queue=true)** - Submit with webhook_url in parameters
 - ✅ **status(status_url)** - Check queue status (optional, for debugging)
 - ✅ **result(response_url)** - Get final result (handled by webhook)
 - ✅ **cancel(cancel_url)** - Cancel if needed
+
+## Critical Webhook Integration:
+**IMPORTANT**: webhook_url must be included in the parameters object, NOT as a separate argument to generate().
+
+```
+# Correct approach:
+parameters = {
+    "prompt": "your prompt here",
+    "image_url": "public_url_here",
+    "webhook_url": webhook_url  # Include in parameters!
+}
+response = generate(model_name, parameters, queue=true)
+```
 
 ## Immediate Response Pattern
 
@@ -550,11 +568,11 @@ return f"🎬 Video generation started! You'll be notified when it's ready. Requ
 - **image_urls**: Array of input images for multi-image models  
 - **width/height**: Output dimensions
 - **queue**: true for video generation (MANDATORY)
-- **webhook_url**: Callback URL for completion notifications (NEW)
+- **webhook_url**: Callback URL for completion notifications (include in parameters object)
 
 ## Error Handling
 - Use correct model names as specified by user
-- For video generation: Use queue=true and webhook_url for async handling
+- For video generation: Use queue=true and webhook_url in parameters for async handling
 - For image generation: Use queue=false for immediate results
 - Validate all required parameters
 - Provide clear error messages and alternatives
@@ -563,7 +581,7 @@ return f"🎬 Video generation started! You'll be notified when it's ready. Requ
 **USER-DRIVEN**: Use whatever video model the user explicitly requests.
 **NO DEFAULTS**: Do not recommend specific models - let users choose.
 - Required: queue=true (mandatory for video generation)
-- Required: webhook_url from register_video_webhook() call
+- Required: webhook_url in parameters object (from register_video_webhook() call)
 - Parameters: image_url (optional for text-to-video), prompt (required), duration (optional), aspect_ratio (optional)
 - Use model discovery if user needs to see available video models
 - Honor user's exact model specification
@@ -900,14 +918,18 @@ async def register_video_webhook(
     jid: str,
     model_name: str,
     prompt: str,
-    request_id: str,
-    status_url: str,
-    response_url: str,
-    tool_context: ToolContext
+    request_id: str = None,
+    status_url: str = None,
+    response_url: str = None,
+    tool_context: ToolContext = None
 ) -> str:
     """
     Register a webhook callback for long-running video generation.
     This enables async notification when video generation completes.
+    
+    Can be called before or after generate() call:
+    - Before: Pass minimal info, request_id will be auto-generated
+    - After: Pass full details from generate() response
 
     Args:
         user_id (str): The user ID for the video request
@@ -915,19 +937,30 @@ async def register_video_webhook(
         jid (str): WhatsApp JID for sending completion notifications
         model_name (str): The FAL.ai model used for generation
         prompt (str): The generation prompt
-        request_id (str): FAL.ai request ID
-        status_url (str): FAL.ai status polling URL
-        response_url (str): FAL.ai result retrieval URL
+        request_id (str, optional): FAL.ai request ID (auto-generated if not provided)
+        status_url (str, optional): FAL.ai status polling URL
+        response_url (str, optional): FAL.ai result retrieval URL
 
     Returns:
-        str: Webhook URL to provide to FAL.ai for callbacks
+        str: Webhook URL to include in FAL.ai generate() parameters
     """
     try:
+        # Generate request ID if not provided
+        if not request_id:
+            import uuid
+            request_id = f"video_{uuid.uuid4().hex[:12]}"
+        
+        # Use placeholder URLs if not provided
+        if not status_url:
+            status_url = "pending"
+        if not response_url:
+            response_url = "pending"
+        
         # Register webhook with the handler
         webhook_url = await webhook_handler.register_video_generation(
             request_id=request_id,
             user_id=user_id,
-            session_id=session_id,
+            session_id=session_id or "",
             jid=jid,
             model_name=model_name,
             prompt=prompt,
@@ -935,7 +968,7 @@ async def register_video_webhook(
             response_url=response_url
         )
         
-        return f"✅ Webhook registered successfully!\n🔗 **Webhook URL**: {webhook_url}\n\n🎬 This webhook will automatically notify the user when video generation completes."
+        return f"✅ Webhook registered!\n🔗 **Webhook URL**: {webhook_url}\n🆔 **Request ID**: {request_id}\n\n📋 **Instructions**: Include this webhook_url in your generate() parameters:\n```\nparameters = {{\n    \"prompt\": \"your prompt\",\n    \"webhook_url\": \"{webhook_url}\"\n}}\n```"
         
     except Exception as e:
         return f"❌ Error registering webhook: {e}"
