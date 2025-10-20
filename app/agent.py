@@ -22,6 +22,7 @@ import asyncio
 import aiohttp
 import json
 from io import BytesIO
+from typing import Optional
 
 import google
 import vertexai
@@ -918,10 +919,10 @@ async def register_video_webhook(
     jid: str,
     model_name: str,
     prompt: str,
-    request_id: str = None,
-    status_url: str = None,
-    response_url: str = None,
-    tool_context: ToolContext = None
+    request_id: Optional[str] = None,
+    status_url: Optional[str] = None,
+    response_url: Optional[str] = None,
+    tool_context: Optional[ToolContext] = None
 ) -> str:
     """
     Register a webhook callback for long-running video generation.
