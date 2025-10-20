@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
-WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "https://my-agentic-rag-aktu2chyfa-uc.a.run.app")
+WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "https://my-agentic-rag-454188184539.us-central1.run.app")
 WHATSAPP_BOT_URL = os.getenv("WHATSAPP_BOT_URL", "http://localhost:3000")
 BUCKET_NAME = os.getenv("BUCKET_NAME", "whatsapp-bot-auth")
 
