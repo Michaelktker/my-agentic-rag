@@ -91,7 +91,7 @@ class WebhookHandler:
             request_id=request_id,
             status_url=status_url,
             response_url=response_url,
-            created_at=asyncio.get_event_loop().time(),
+            created_at=str(asyncio.get_event_loop().time()),
             webhook_url=webhook_url
         )
         
