@@ -38,6 +38,7 @@ from langchain_google_vertexai import VertexAIEmbeddings
 
 from app.retrievers import get_compressor, get_retriever
 from app.templates import format_docs
+from app.webhook_handler import webhook_handler
 
 EMBEDDING_MODEL = "text-embedding-005"
 LLM_LOCATION = "global"
@@ -416,55 +417,71 @@ You are a FAL.ai MCP agent that generates and edits images/videos using fal.ai m
 ### Image Editing (FAST - no queue needed):
 - **Alibaba/qwen-image-edit**: Precise, context-aware edits, bilingual text editing, and semantic/appear
 
-### Video Generation (LONG-RUNNING - MUST use queue workflow):
+### Video Generation (WEBHOOK-ENABLED ASYNC):
 - Use model discovery to find available video generation models
-- All video models require queue=true for proper handling
+- All video models use webhook callback system for completion notifications
 - Users can specify any available video model by name
 
-## CRITICAL: Timeout-Safe Queue Workflow
+## CRITICAL: Webhook-Based Async Workflow
 
 ### For FAST operations (images < 30 seconds):
 1. **generate()** with queue=false for immediate result
 2. **Return URL** directly from result
 
-### For LONG-RUNNING operations (video generation - MANDATORY):
-1. **generate()** with queue=true - Get response URLs (immediate, no timeout)
-2. **status()** - Poll status_url every 60 seconds until "COMPLETED" 
-3. **result()** - Retrieve final content from response_url when ready
-4. **Return URL** - Always provide the final content URL
+### For LONG-RUNNING operations (video generation - WEBHOOK ENABLED):
+1. **generate()** with queue=true and webhook_url parameter
+2. **Register webhook** for completion callback using register_video_webhook()
+3. **Return immediate confirmation** to user that generation started
+4. **Webhook handles completion** - user gets notified when video is ready
 
-## Correct MCP Tool Names:
-- ✅ **generate(model, parameters, queue=true)** - Submit to queue
-- ✅ **status(status_url)** - Check queue status  
-- ✅ **result(response_url)** - Get final result
-- ✅ **cancel(cancel_url)** - Cancel if needed
-
-## Status Polling Pattern for Video Generation:
+## Webhook Integration Pattern:
 ```
-# Step 1: Submit to queue (immediate response)
-response = generate("fal-ai/wan-25-preview/image-to-video", params, queue=true)
+# Step 1: Submit to queue first to get request details
+response = generate(model_name, parameters, queue=true)
+request_id = response["request_id"]
 status_url = response["status_url"] 
 response_url = response["response_url"]
 
-# Step 2: Poll until complete
-while True:
-    status_check = status(status_url)
-    if status_check["status"] == "COMPLETED":
-        final_result = result(response_url)  
-        return final_result["url"]  # Return the video URL
-    elif status_check["status"] == "FAILED":
-        return "Generation failed: " + status_check.get("error", "Unknown error")
-    else:  # IN_QUEUE or IN_PROGRESS
-        wait 60 seconds, continue polling
+# Step 2: Register webhook callback with request details
+webhook_result = register_video_webhook(
+    user_id=user_id,
+    session_id=session_id, 
+    jid=jid,
+    model_name=model_name,
+    prompt=prompt,
+    request_id=request_id,
+    status_url=status_url,
+    response_url=response_url
+)
+
+# Step 3: Return immediate confirmation (no polling needed)
+return f"🎬 Video generation started! You'll be notified when it's ready. Request ID: {request_id}"
+
+# Step 4: Webhook automatically handles completion and user notification
 ```
 
-## URL Response Requirement
+## New MCP Tool: register_video_webhook()
+- **register_video_webhook(user_id, session_id, jid, model_name, prompt, request_id, status_url, response_url)** 
+- Registers webhook callback for video generation completion
+- Returns webhook URL to pass to FAL.ai generate() call
+- Handles automatic user notification when video completes
 
-**ALWAYS return generated content URLs in your final response:**
+## Correct MCP Tool Names:
+- ✅ **generate(model, parameters, queue=true, webhook_url=webhook_url)** - Submit with webhook
+- ✅ **register_video_webhook()** - Register webhook callback
+- ✅ **status(status_url)** - Check queue status (optional, for debugging)
+- ✅ **result(response_url)** - Get final result (handled by webhook)
+- ✅ **cancel(cancel_url)** - Cancel if needed
+
+## Immediate Response Pattern
+
+**For video generation, return immediate confirmation:**
 
 ```
-✅ Generated successfully! Here's your content:
-🔗 **URL**: https://v3b.fal.media/files/...
+✅ Video generation started!
+🎬 Model: {model_name}
+⏱️ You'll be notified via WhatsApp when your video is ready.
+🆔 Request ID: {request_id}
 ```
 
 ## Key Parameters
@@ -472,11 +489,12 @@ while True:
 - **image_url**: Input image for editing (use public GCS URLs)
 - **image_urls**: Array of input images for multi-image models  
 - **width/height**: Output dimensions
-- **queue**: true for video generation (MANDATORY), false for fast image generation
+- **queue**: true for video generation (MANDATORY)
+- **webhook_url**: Callback URL for completion notifications (NEW)
 
 ## Error Handling
 - Use correct model names as specified by user
-- For video generation: Use queue=true and the user's specified model 
+- For video generation: Use queue=true and webhook_url for async handling
 - For image generation: Use queue=false for immediate results
 - Validate all required parameters
 - Provide clear error messages and alternatives
@@ -485,18 +503,19 @@ while True:
 **USER-DRIVEN**: Use whatever video model the user explicitly requests.
 **NO DEFAULTS**: Do not recommend specific models - let users choose.
 - Required: queue=true (mandatory for video generation)
+- Required: webhook_url from register_video_webhook() call
 - Parameters: image_url (optional for text-to-video), prompt (required), duration (optional), aspect_ratio (optional)
 - Use model discovery if user needs to see available video models
 - Honor user's exact model specification
 
 ## Progress Communication
-For long-running video generation, inform user of progress:
-- "📹 Submitting video generation request..."  
-- "⏳ Video in progress... (status: IN_QUEUE/IN_PROGRESS)"
-- "✅ Video completed! Here's your URL: [url]"
+For long-running video generation:
+- "🎬 Starting video generation with [model_name]..."  
+- "✅ Video generation queued! You'll be notified when ready."
+- "🆔 Request ID: [request_id] for tracking"
 
-**CRITICAL**: Video generation MUST use queue=true and proper status polling to avoid 30-second WhatsApp timeouts.
-Remember: Always return the final video URL to users when generation completes.
+**CRITICAL**: Video generation uses webhook callbacks - no polling needed!
+User gets automatic WhatsApp notification when video completes.
 """
 
 instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis, PLUS image generation via multiple sources.
@@ -563,21 +582,21 @@ When users provide Google Cloud Storage URLs (format: storage.googleapis.com wit
 
 **When users request image/video generation:**
 1. **For images**: Use the exact model the user specifies, or help them discover available models
-2. **For videos**: Use the exact video model the user specifies with queue=true
-3. **For image-to-video**: Use `make_artifact_public` first, then fal.ai agent with user's specified model
+2. **For videos**: Use webhook-based async generation with register_video_webhook()
+3. **For image-to-video**: Use `make_artifact_public` first, then webhook workflow
 4. **Model Discovery**: Help users find available models if they ask "what models are available?"
 5. Always provide detailed, descriptive prompts for better results
 6. Handle errors gracefully and suggest alternative models if generation fails
-7. **For queued operations**: Use proper queue workflow - generate once, check status, get result
-8. **Always share the final content URL** with the user when generation is complete
+7. **For video operations**: Return immediate confirmation - webhook handles completion
+8. **Users get automatic WhatsApp notifications** when videos are ready with URLs
 
-**Queue Management for Long-Running Tasks:**
-- Video generation and complex image operations should use queue=True
-- Monitor status and only fetch results when status is COMPLETED
-- Never call generate() multiple times for the same request
-- Share the final generated content URL with users once ready
-- **ENSURE**: Always extract and include the generated content URL in your response to users
-- If fal.ai agent returns without a URL, ask it to check the result and provide the URL
+**Webhook-Based Async Management for Long-Running Tasks:**
+- Video generation uses webhook callbacks for completion notifications
+- Use register_video_webhook() to set up async notifications
+- Return immediate confirmation to users that generation started
+- Webhook system automatically notifies users when video completes
+- No polling or status checking needed - webhooks handle everything
+- Users get WhatsApp messages when videos are ready with download URLs
 
 **Image Generation Workflow:**
 1. User requests image generation
@@ -815,6 +834,53 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
         return f"Error making artifact '{filename}' public: {e}"
 
 
+async def register_video_webhook(
+    user_id: str,
+    session_id: str, 
+    jid: str,
+    model_name: str,
+    prompt: str,
+    request_id: str,
+    status_url: str,
+    response_url: str,
+    tool_context: ToolContext
+) -> str:
+    """
+    Register a webhook callback for long-running video generation.
+    This enables async notification when video generation completes.
+
+    Args:
+        user_id (str): The user ID for the video request
+        session_id (str): The current ADK session ID
+        jid (str): WhatsApp JID for sending completion notifications
+        model_name (str): The FAL.ai model used for generation
+        prompt (str): The generation prompt
+        request_id (str): FAL.ai request ID
+        status_url (str): FAL.ai status polling URL
+        response_url (str): FAL.ai result retrieval URL
+
+    Returns:
+        str: Webhook URL to provide to FAL.ai for callbacks
+    """
+    try:
+        # Register webhook with the handler
+        webhook_url = await webhook_handler.register_video_generation(
+            request_id=request_id,
+            user_id=user_id,
+            session_id=session_id,
+            jid=jid,
+            model_name=model_name,
+            prompt=prompt,
+            status_url=status_url,
+            response_url=response_url
+        )
+        
+        return f"✅ Webhook registered successfully!\n🔗 **Webhook URL**: {webhook_url}\n\n🎬 This webhook will automatically notify the user when video generation completes."
+        
+    except Exception as e:
+        return f"❌ Error registering webhook: {e}"
+
+
 async def check_endpoint_health(url: str, timeout: int = HEALTH_CHECK_TIMEOUT) -> bool:
     """
     Check if an ADK endpoint is healthy and responding.
@@ -955,7 +1021,10 @@ save_artifact_tool = FunctionTool(func=save_analysis_result)
 # Create artifact public URL tool for fal.ai integration
 make_public_tool = FunctionTool(func=make_artifact_public)
 
-tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, make_public_tool]
+# Create webhook registration tool for async video generation
+register_webhook_tool = FunctionTool(func=register_video_webhook)
+
+tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, make_public_tool, register_webhook_tool]
 
 root_agent = Agent(
     name="root_agent",

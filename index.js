@@ -1826,6 +1826,73 @@ class WhatsAppBot {
         }
     }
 
+    /**
+     * Start polling for webhook-generated outbound messages
+     */
+    startWebhookMessagePolling() {
+        logger.info('🔄 Starting webhook message polling...');
+        
+        // Poll every 30 seconds for outbound messages
+        setInterval(async () => {
+            try {
+                await this.processWebhookMessages();
+            } catch (error) {
+                logger.error('Error processing webhook messages:', error);
+            }
+        }, 30000); // 30 second interval
+    }
+
+    /**
+     * Process outbound messages from webhook callbacks
+     */
+    async processWebhookMessages() {
+        try {
+            // List outbound messages from GCS
+            const [files] = await bucket.getFiles({
+                prefix: 'outbound_messages/',
+                maxResults: 10 // Process up to 10 messages per poll
+            });
+
+            if (files.length === 0) {
+                return; // No messages to process
+            }
+
+            logger.info(`📬 Processing ${files.length} webhook messages...`);
+
+            for (const file of files) {
+                try {
+                    // Download and parse message
+                    const [data] = await file.download();
+                    const messageData = JSON.parse(data.toString());
+
+                    // Validate message format
+                    if (messageData.jid && messageData.message) {
+                        logger.info(`📤 Sending webhook message to ${messageData.jid}: ${messageData.message.substring(0, 100)}...`);
+                        
+                        // Send the message
+                        await this.sendMessage(messageData.jid, messageData.message);
+                        
+                        // Delete processed message
+                        await file.delete();
+                        logger.info(`✅ Processed and deleted webhook message: ${file.name}`);
+                        
+                        // Add small delay between messages
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                    } else {
+                        logger.warn(`❌ Invalid message format: ${file.name}`);
+                        // Delete invalid message
+                        await file.delete();
+                    }
+                } catch (messageError) {
+                    logger.error(`❌ Error processing message ${file.name}:`, messageError);
+                    // Don't delete on processing error - might be temporary
+                }
+            }
+        } catch (error) {
+            logger.error('❌ Error in webhook message polling:', error);
+        }
+    }
+
     async start() {
         try {
             await this.initialize();
@@ -1834,6 +1901,9 @@ class WhatsAppBot {
             setInterval(() => {
                 this.cleanupSessions();
             }, config.bot.sessionCleanupIntervalMs);
+
+            // Start webhook message polling
+            this.startWebhookMessagePolling();
 
         } catch (error) {
             logger.error('Failed to start WhatsApp Bot:', error);
