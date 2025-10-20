@@ -104,6 +104,52 @@ class WebhookHandler:
         
         return webhook_url
     
+    async def update_webhook_request_id(self, old_request_id: str, new_request_id: str) -> bool:
+        """
+        Update the webhook registration with the actual FAL.ai request ID
+        
+        Args:
+            old_request_id: The temporary request ID we generated
+            new_request_id: The actual FAL.ai request ID
+            
+        Returns:
+            bool: True if update successful, False otherwise
+        """
+        try:
+            # Get existing context
+            context = await self._get_context(old_request_id)
+            if not context:
+                logger.error(f"❌ No context found for old request ID: {old_request_id}")
+                return False
+            
+            # Create new context with updated request ID
+            new_context = VideoGenerationContext(
+                user_id=context.user_id,
+                session_id=context.session_id,
+                jid=context.jid,
+                model_name=context.model_name,
+                prompt=context.prompt,
+                request_id=new_request_id,  # Use the new FAL.ai request ID
+                status_url=context.status_url,
+                response_url=context.response_url,
+                created_at=context.created_at,
+                webhook_url=f"{WEBHOOK_BASE_URL}/webhook/fal/{new_request_id}"  # Update webhook URL
+            )
+            
+            # Store new context with new request ID
+            self.pending_requests[new_request_id] = new_context
+            await self._store_context_gcs(new_request_id, new_context)
+            
+            # Cleanup old context
+            await self._cleanup_context(old_request_id)
+            
+            logger.info(f"✅ Updated webhook registration: {old_request_id} → {new_request_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error updating webhook request ID: {e}")
+            return False
+    
     async def handle_webhook_callback(self, request_id: str, webhook_data: WebhookRequest):
         """Handle incoming webhook callback from FAL.ai"""
         logger.info(f"📨 Webhook callback received for request: {request_id}")

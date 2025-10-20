@@ -497,6 +497,36 @@ You are a FAL.ai MCP agent that generates and edits images/videos using fal.ai m
 
 ## Webhook Integration Pattern:
 ```
+# Step 1: Register webhook BEFORE calling generate()
+webhook_result = register_video_webhook(
+    user_id=user_id,
+    session_id=session_id, 
+    jid=jid,
+    model_name=model_name,
+    prompt=prompt,
+    request_id="temp_video_123",  # Temporary ID
+    status_url="",
+    response_url=""
+)
+
+# Step 2: Submit to queue with webhook URL from step 1
+response = generate(model_name, parameters, queue=true)
+real_request_id = response["request_id"]
+status_url = response["status_url"] 
+response_url = response["response_url"]
+
+# Step 3: Update webhook with real FAL.ai request ID 
+update_result = update_webhook_request_id(
+    old_request_id="temp_video_123",
+    new_request_id=real_request_id
+)
+
+# Step 4: Return immediate confirmation (no polling needed)
+return f"🎬 Video generation started! You'll be notified when it's ready. Request ID: {real_request_id}"
+
+# Step 5: Webhook automatically handles completion and user notification
+```
+```
 # Step 1: Register webhook callback FIRST to get webhook URL
 webhook_result = register_video_webhook(
     user_id=user_id,
@@ -526,15 +556,21 @@ return f"🎬 Video generation started! You'll be notified when it's ready. Requ
 # Step 5: Webhook automatically handles completion and user notification
 ```
 
-## New MCP Tool: register_video_webhook()
+## New MCP Tools: Video Webhook System
 - **register_video_webhook(user_id, session_id, jid, model_name, prompt, request_id, status_url, response_url)** 
 - Registers webhook callback for video generation completion
+- Use BEFORE calling generate() with temporary request_id
 - Returns webhook URL to pass to FAL.ai generate() call
-- Handles automatic user notification when video completes
+
+- **update_webhook_request_id(old_request_id, new_request_id)**
+- Updates webhook registration with real FAL.ai request ID  
+- Call AFTER generate() returns the actual request_id
+- Ensures FAL.ai calls the correct webhook endpoint
 
 ## Correct MCP Tool Names:
-- ✅ **register_video_webhook()** - Register webhook callback FIRST
-- ✅ **generate(model, parameters, queue=true)** - Submit with webhook_url in parameters
+- ✅ **generate(model, parameters, queue=true, webhook_url=webhook_url)** - Submit with webhook
+- ✅ **register_video_webhook()** - Register webhook callback (call FIRST)
+- ✅ **update_webhook_request_id()** - Update with real FAL.ai request ID (call AFTER generate)
 - ✅ **status(status_url)** - Check queue status (optional, for debugging)
 - ✅ **result(response_url)** - Get final result (handled by webhook)
 - ✅ **cancel(cancel_url)** - Cancel if needed
@@ -975,6 +1011,38 @@ async def register_video_webhook(
         return f"❌ Error registering webhook: {e}"
 
 
+async def update_webhook_request_id(
+    old_request_id: str,
+    new_request_id: str,
+    tool_context: ToolContext
+) -> str:
+    """
+    Update webhook registration with the actual FAL.ai request ID.
+    Call this AFTER getting the real request ID from FAL.ai generate() response.
+
+    Args:
+        old_request_id (str): The temporary request ID from register_video_webhook
+        new_request_id (str): The actual FAL.ai request ID from generate() response
+
+    Returns:
+        str: Success/failure message
+    """
+    try:
+        # Update webhook registration with real FAL.ai request ID
+        success = await webhook_handler.update_webhook_request_id(
+            old_request_id=old_request_id,
+            new_request_id=new_request_id
+        )
+        
+        if success:
+            return f"✅ Webhook updated successfully!\n📝 Old ID: {old_request_id}\n📝 New ID: {new_request_id}\n\n🎬 FAL.ai will now call the correct webhook when video completes."
+        else:
+            return f"❌ Failed to update webhook registration. Old ID: {old_request_id}, New ID: {new_request_id}"
+        
+    except Exception as e:
+        return f"❌ Error updating webhook: {e}"
+
+
 async def check_endpoint_health(url: str, timeout: int = HEALTH_CHECK_TIMEOUT) -> bool:
     """
     Check if an ADK endpoint is healthy and responding.
@@ -1117,8 +1185,9 @@ make_public_tool = FunctionTool(func=make_artifact_public)
 
 # Create webhook registration tool for async video generation
 register_webhook_tool = FunctionTool(func=register_video_webhook)
+update_webhook_tool = FunctionTool(func=update_webhook_request_id)
 
-tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, make_public_tool, register_webhook_tool]
+tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, make_public_tool, register_webhook_tool, update_webhook_tool]
 
 root_agent = Agent(
     name="root_agent",
