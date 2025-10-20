@@ -394,7 +394,7 @@ Your role is to:
 4. Retrieve repository information and metadata
 5. Perform code analysis and understanding
 
-By default, you are working with the GitHub repository: {GITHUB_OWNER}/{GITHUB_REPO}
+By default, you are working with the GitHub repository: Michaelktker/my-agentic-rag
 When using GitHub tools, use this repository unless the user specifically requests a different one.
 
 When performing GitHub operations:
@@ -455,7 +455,7 @@ webhook_result = register_video_webhook(
 )
 
 # Step 3: Return immediate confirmation (no polling needed)
-return f"🎬 Video generation started! You'll be notified when it's ready. Request ID: {request_id}"
+return f"🎬 Video generation started! You'll be notified when it's ready. Request ID: [request_id]"
 
 # Step 4: Webhook automatically handles completion and user notification
 ```
@@ -479,9 +479,9 @@ return f"🎬 Video generation started! You'll be notified when it's ready. Requ
 
 ```
 ✅ Video generation started!
-🎬 Model: {model_name}
+🎬 Model: [model_name]
 ⏱️ You'll be notified via WhatsApp when your video is ready.
-🆔 Request ID: {request_id}
+🆔 Request ID: [request_id]
 ```
 
 ## Key Parameters
@@ -614,7 +614,7 @@ When users provide Google Cloud Storage URLs (format: storage.googleapis.com wit
 - **Public GCS URLs are permanent - be mindful of sensitive content**
 - **All image generation is now handled exclusively through fal.ai models**
 
-GitHub agent works with repository: {GITHUB_OWNER}/{GITHUB_REPO} by default.
+GitHub agent works with repository: Michaelktker/my-agentic-rag by default.
 Use web search for current information not in your knowledge base.
 Use fal.ai agent for all AI content generation capabilities including images and videos.
 
