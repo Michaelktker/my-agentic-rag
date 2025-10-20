@@ -123,19 +123,79 @@ def retrieve_docs(query: str) -> str:
 
 async def list_user_artifacts(tool_context: ToolContext) -> str:
     """
-    Lists all artifacts (media files) uploaded by the current user.
+    Lists all artifacts (media files) uploaded by the current user across all sessions.
     Use this to see what files are available for analysis.
 
     Returns:
         str: A formatted list of available artifacts or an error message.
     """
     try:
-        available_files = await tool_context.list_artifacts()
-        if not available_files:
-            return "You have no saved artifacts. Upload some media files to get started!"
+        # First try the standard ADK approach
+        try:
+            available_files = await tool_context.list_artifacts()
+            if available_files:
+                file_list = "\n".join([f"• {filename}" for filename in available_files])
+                return f"Here are your available artifacts:\n{file_list}\n\nI can analyze any of these files for you!"
+        except Exception as context_error:
+            print(f"DEBUG list_artifacts: tool_context.list_artifacts() failed: {context_error}")
+        
+        # Fallback: search across all sessions using direct GCS access
+        from google.cloud import storage
+        
+        # Get bucket from environment or default
+        artifacts_bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(artifacts_bucket_name)
+        
+        # Get user ID from tool context if available
+        user_id = getattr(tool_context, 'user_id', None)
+        
+        # Debug logging
+        print(f"DEBUG list_artifacts: Tool context user_id: {user_id}")
+        
+        if not user_id:
+            # Try alternative attributes
+            for attr in ['userId', 'user', '_user_id', 'current_user']:
+                if hasattr(tool_context, attr):
+                    alt_user = getattr(tool_context, attr)
+                    if alt_user:
+                        user_id = alt_user
+                        break
+        
+        if not user_id:
+            # Search across all users if we can't determine the specific user
+            user_id = '*'
+            print(f"DEBUG list_artifacts: No user_id found, using wildcard search")
+        
+        # Search for artifacts across all sessions
+        if user_id == '*':
+            prefix = "app/"
+            print(f"DEBUG list_artifacts: Searching across all users with prefix '{prefix}'")
         else:
-            file_list = "\n".join([f"• {filename}" for filename in available_files])
-            return f"Here are your available artifacts:\n{file_list}\n\nI can analyze any of these files for you!"
+            prefix = f"app/{user_id}/"
+            print(f"DEBUG list_artifacts: Searching for user '{user_id}' with prefix '{prefix}'")
+        
+        # Collect unique filenames across all sessions
+        artifact_files = set()
+        blobs = bucket.list_blobs(prefix=prefix)
+        
+        for blob in blobs:
+            # Extract the path components: app/user_id/session_id/filename/version
+            path_parts = blob.name.split('/')
+            if len(path_parts) >= 5:
+                filename = path_parts[3]
+                # Filter out system files and raw files
+                if not filename.endswith('_raw.jpg') and not filename.startswith('.'):
+                    artifact_files.add(filename)
+        
+        if not artifact_files:
+            return "You have no saved artifacts. Upload some media files to get started!"
+        
+        # Sort files for consistent display
+        sorted_files = sorted(list(artifact_files))
+        file_list = "\n".join([f"• {filename}" for filename in sorted_files])
+        return f"Here are your available artifacts:\n{file_list}\n\nI can analyze any of these files for you!"
+        
     except ValueError as e:
         return f"Error listing artifacts: {e}. Artifact service may not be configured."
     except Exception as e:
