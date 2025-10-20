@@ -526,7 +526,7 @@ update_result = update_webhook_request_id(
 )
 
 # Step 4: Return immediate confirmation (no polling needed)
-return f"🎬 Video generation started! You'll be notified when it's ready. Request ID: {{real_request_id}}"
+return f"🎬 Video generation started! You'll be notified when it's ready. Request ID: {{{{real_request_id}}}}"
 
 # Step 5: Webhook automatically handles completion and user notification
 ```
