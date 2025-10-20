@@ -2,7 +2,7 @@
   "adk": {
     "url": "https://my-agentic-rag-638797485217.us-central1.run.app",
     "appName": "app",
-    "timeout": 30000
+    "timeout": 120000
   },
   "gcs": {
     "projectId": "production-adk",
