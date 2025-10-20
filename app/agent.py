@@ -199,7 +199,7 @@ async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_con
             print(f"DEBUG load_artifact: No user_id found, using wildcard search")
         
         # Search for the artifact across all sessions for this user
-        # Path pattern: app/{user_id}/{session_id}/{filename}/{version}
+        # Path pattern: app/[user_id]/[session_id]/[filename]/[version]
         if user_id == '*':
             # Search across all users if we can't determine the specific user
             prefix = "app/"
