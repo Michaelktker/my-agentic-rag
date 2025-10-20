@@ -21,6 +21,7 @@ import uuid
 import asyncio
 import aiohttp
 import json
+import logging
 from io import BytesIO
 from typing import Optional
 
@@ -31,7 +32,7 @@ from google.adk.tools.mcp_tool import MCPToolset, StreamableHTTPConnectionParams
 from mcp.client.stdio import StdioServerParameters
 from google.adk.tools import google_search
 from google.adk.tools.agent_tool import AgentTool
-from google.adk.tools import FunctionTool
+from google.adk.tools import FunctionTool, LongRunningFunctionTool
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 from langchain_google_vertexai import VertexAIEmbeddings
@@ -49,6 +50,9 @@ LLM = "gemini-2.5-flash"
 # GitHub repository constants
 GITHUB_OWNER = "Michaelktker"
 GITHUB_REPO = "my-agentic-rag"
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 # ADK Endpoint Configuration - Production first, staging fallback
 PRODUCTION_ADK_URL = os.getenv("PRODUCTION_ADK_URL", "https://my-agentic-rag-638797485217.us-central1.run.app")
@@ -667,6 +671,22 @@ You have access to several specialized capabilities:
 - **Schema Inspection**: Always check model schemas before generation
 - **Queue Management**: Handle long-running generations with proper status checking
 
+**NEW: Long-Running Video Generation Tool:**
+You now have access to `generate_video_long_running` - a specialized tool for video generation that:
+- Starts video generation immediately and returns operation details
+- Pauses the agent run for external polling
+- Enables the WhatsApp bot to check status and send completion notifications
+- Requires: model_name, prompt, optional image_url, user_id, jid
+
+**Usage Pattern for Video Generation:**
+1. **Use generate_video_long_running() directly** instead of the fal.ai agent for videos
+2. This tool returns operation details immediately and pauses the agent
+3. The WhatsApp bot will poll for completion and continue the conversation
+4. Users get automatic notifications when videos are ready
+
+**Legacy Webhook System (Still Available):**
+The webhook-based system (register_video_webhook) is still available for compatibility
+
 **Multimodal Analysis Capabilities:**
 - **Images**: Describe, analyze content, extract text, identify objects, analyze compositions
 - **Audio**: Transcribe speech, identify sounds, analyze music (when audio data is available)
@@ -697,17 +717,18 @@ When users provide Google Cloud Storage URLs (format: storage.googleapis.com wit
 
 **When users request image/video generation:**
 1. **For images**: Use the exact model the user specifies, or help them discover available models
-2. **For videos**: Use webhook-based async generation with register_video_webhook()
-3. **For image-to-video**: Use `make_artifact_public` first, then webhook workflow
+2. **For videos**: Use `generate_video_long_running()` tool directly - NO webhook setup needed
+3. **For image-to-video**: Use `make_artifact_public` first, then `generate_video_long_running()`
 4. **Model Discovery**: Help users find available models if they ask "what models are available?"
 5. Always provide detailed, descriptive prompts for better results
 6. Handle errors gracefully and suggest alternative models if generation fails
-7. **For video operations**: Return immediate confirmation - webhook handles completion
+7. **For video operations**: Return immediate confirmation - long-running tool handles completion
 8. **Users get automatic WhatsApp notifications** when videos are ready with URLs
 
-**Webhook-Based Async Management for Long-Running Tasks:**
-- Video generation uses webhook callbacks for completion notifications
-- Use register_video_webhook() to set up async notifications
+**Long-Running Tool Management for Video Generation:**
+- Video generation now uses the `generate_video_long_running()` tool
+- This tool pauses the agent run and enables external polling
+- WhatsApp bot checks status and continues conversation when complete
 - Return immediate confirmation to users that generation started
 - Webhook system automatically notifies users when video completes
 - No polling or status checking needed - webhooks handle everything
@@ -949,6 +970,275 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
         return f"Error making artifact '{filename}' public: {e}"
 
 
+async def generate_video_long_running(
+    model_name: str,
+    prompt: str,
+    image_url: Optional[str] = None,
+    user_id: Optional[str] = None,
+    jid: Optional[str] = None,
+    tool_context: Optional[ToolContext] = None
+) -> dict:
+    """
+    Start long-running video generation using FAL.ai.
+    
+    This is a LongRunningFunctionTool that:
+    1. Initiates video generation with FAL.ai
+    2. Returns immediately with operation details
+    3. Pauses the agent run for client polling
+    
+    Args:
+        model_name (str): FAL.ai model (e.g., "fal-ai/kling-video/v2/master/image-to-video")
+        prompt (str): Video generation prompt
+        image_url (Optional[str]): Input image URL for image-to-video models
+        user_id (Optional[str]): User identifier for tracking
+        jid (Optional[str]): WhatsApp JID for final notification
+        
+    Returns:
+        dict: Operation details for polling {
+            "operation_id": str,
+            "status": "IN_PROGRESS",
+            "model_name": str,
+            "prompt": str,
+            "fal_request_id": str,
+            "status_url": str,
+            "response_url": str,
+            "user_id": str,
+            "jid": str
+        }
+    """
+    try:
+        # Generate unique operation ID
+        operation_id = f"video_gen_{uuid.uuid4().hex[:12]}"
+        
+        # Get session ID from tool context
+        session_id = getattr(tool_context, 'session_id', 'default') if tool_context else 'default'
+        
+        # Prepare FAL.ai parameters
+        parameters = {
+            "prompt": prompt
+        }
+        
+        # Add image URL if provided
+        if image_url:
+            parameters["image_url"] = image_url
+            
+        # Add video-specific parameters
+        if "kling" in model_name.lower():
+            parameters.setdefault("duration", "5")
+            parameters.setdefault("aspect_ratio", "16:9")
+        
+        # Call FAL.ai MCP agent to start generation (queued)
+        # We need to use the FAL.ai tools directly since we're in a function
+        # This approach will be updated to use the MCP toolset properly
+        
+        # For now, we'll make a direct HTTP call to FAL.ai
+        fal_api_key = os.getenv("FAL_KEY")
+        if not fal_api_key:
+            raise Exception("FAL_KEY environment variable not set")
+        
+        # Make direct FAL.ai API call for queue submission
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                "Authorization": f"Key {fal_api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            fal_url = f"https://queue.fal.run/{model_name}"
+            
+            async with session.post(fal_url, json=parameters, headers=headers) as response:
+                if response.status == 200:
+                    fal_response = await response.json()
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"FAL.ai API error {response.status}: {error_text}")
+        
+        # Extract FAL.ai response details
+        fal_request_id = fal_response.get('request_id')
+        status_url = fal_response.get('status_url')
+        response_url = fal_response.get('response_url')
+        
+        if not fal_request_id:
+            raise Exception("FAL.ai did not return a request_id")
+        
+        # Store operation details for polling
+        operation_details = {
+            "operation_id": operation_id,
+            "status": "IN_PROGRESS",
+            "model_name": model_name,
+            "prompt": prompt,
+            "fal_request_id": fal_request_id,
+            "status_url": status_url,
+            "response_url": response_url,
+            "user_id": user_id or "unknown",
+            "jid": jid or "unknown",
+            "session_id": session_id,
+            "created_at": asyncio.get_event_loop().time()
+        }
+        
+        # Store in GCS for persistence across sessions
+        await _store_operation_details(operation_id, operation_details)
+        
+        # Return operation details - this pauses the agent run
+        return operation_details
+        
+    except Exception as e:
+        logger.error(f"❌ Error starting video generation: {e}")
+        return {
+            "operation_id": f"failed_{uuid.uuid4().hex[:8]}",
+            "status": "FAILED",
+            "error": str(e),
+            "model_name": model_name,
+            "prompt": prompt
+        }
+
+
+async def _store_operation_details(operation_id: str, details: dict):
+    """Store operation details in GCS for persistence"""
+    try:
+        # Import GCS client
+        from google.cloud import storage
+        
+        storage_client = storage.Client()
+        bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
+        bucket = storage_client.bucket(bucket_name)
+        
+        # Store operation details
+        operation_path = f"long_running_operations/{operation_id}.json"
+        blob = bucket.blob(operation_path)
+        blob.upload_from_string(
+            json.dumps(details, indent=2),
+            content_type='application/json'
+        )
+        
+        logger.info(f"💾 Stored operation details: {operation_path}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error storing operation details: {e}")
+
+
+async def get_video_operation_status(operation_id: str) -> dict:
+    """
+    Get the current status of a video generation operation.
+    
+    This function is used by external clients (like WhatsApp bot) to:
+    1. Poll the operation status
+    2. Get final results when complete
+    3. Send results back to the agent to continue
+    
+    Args:
+        operation_id (str): The operation ID returned by generate_video_long_running
+        
+    Returns:
+        dict: Current operation status with results if complete
+    """
+    try:
+        # Load operation details from GCS
+        from google.cloud import storage
+        
+        storage_client = storage.Client()
+        bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
+        bucket = storage_client.bucket(bucket_name)
+        
+        operation_path = f"long_running_operations/{operation_id}.json"
+        blob = bucket.blob(operation_path)
+        
+        if not blob.exists():
+            return {
+                "operation_id": operation_id,
+                "status": "NOT_FOUND",
+                "error": "Operation not found"
+            }
+        
+        # Load stored details
+        details = json.loads(blob.download_as_text())
+        fal_request_id = details.get("fal_request_id")
+        status_url = details.get("status_url")
+        response_url = details.get("response_url")
+        
+        if not status_url:
+            return {
+                **details,
+                "status": "ERROR",
+                "error": "Missing status URL"
+            }
+        
+        # Check FAL.ai status
+        async with aiohttp.ClientSession() as session:
+            async with session.get(status_url) as response:
+                if response.status == 200:
+                    fal_status = await response.json()
+                    
+                    if fal_status.get("status") == "COMPLETED":
+                        # Get final result
+                        if response_url:
+                            async with session.get(response_url) as result_response:
+                                if result_response.status == 200:
+                                    final_result = await result_response.json()
+                                    
+                                    # Extract video URL
+                                    video_url = None
+                                    if "url" in final_result:
+                                        video_url = final_result["url"]
+                                    elif "data" in final_result and isinstance(final_result["data"], dict):
+                                        video_url = final_result["data"].get("url")
+                                    
+                                    # Update details with completion
+                                    details.update({
+                                        "status": "COMPLETED",
+                                        "video_url": video_url,
+                                        "final_result": final_result,
+                                        "completed_at": asyncio.get_event_loop().time()
+                                    })
+                                    
+                                    # Update stored details
+                                    blob.upload_from_string(
+                                        json.dumps(details, indent=2),
+                                        content_type='application/json'
+                                    )
+                                    
+                                    return details
+                                
+                    elif fal_status.get("status") == "FAILED":
+                        # Mark as failed
+                        details.update({
+                            "status": "FAILED",
+                            "error": fal_status.get("error", "Video generation failed"),
+                            "failed_at": asyncio.get_event_loop().time()
+                        })
+                        
+                        # Update stored details
+                        blob.upload_from_string(
+                            json.dumps(details, indent=2),
+                            content_type='application/json'
+                        )
+                        
+                        return details
+                    
+                    else:
+                        # Still in progress
+                        details.update({
+                            "status": "IN_PROGRESS",
+                            "queue_position": fal_status.get("queue_position"),
+                            "progress": fal_status.get("progress")
+                        })
+                        
+                        return details
+                
+        return {
+            **details,
+            "status": "ERROR",
+            "error": "Could not check FAL.ai status"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error checking operation status: {e}")
+        return {
+            "operation_id": operation_id,
+            "status": "ERROR",
+            "error": str(e)
+        }
+
+
 async def register_video_webhook(
     user_id: str,
     session_id: str, 
@@ -1183,11 +1473,14 @@ save_artifact_tool = FunctionTool(func=save_analysis_result)
 # Create artifact public URL tool for fal.ai integration
 make_public_tool = FunctionTool(func=make_artifact_public)
 
-# Create webhook registration tool for async video generation
+# Create long-running video generation tool (NEW APPROACH)
+video_generation_tool = LongRunningFunctionTool(func=generate_video_long_running)
+
+# Create webhook registration tool for async video generation (LEGACY - keeping for compatibility)
 register_webhook_tool = FunctionTool(func=register_video_webhook)
 update_webhook_tool = FunctionTool(func=update_webhook_request_id)
 
-tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, make_public_tool, register_webhook_tool, update_webhook_tool]
+tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, make_public_tool, video_generation_tool, register_webhook_tool, update_webhook_tool]
 
 root_agent = Agent(
     name="root_agent",
