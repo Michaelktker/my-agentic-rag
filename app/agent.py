@@ -1010,8 +1010,29 @@ async def generate_video_long_running(
         # Generate unique operation ID
         operation_id = f"video_gen_{uuid.uuid4().hex[:12]}"
         
-        # Get session ID from tool context
-        session_id = getattr(tool_context, 'session_id', 'default') if tool_context else 'default'
+        # Extract user information from tool context if not provided
+        if tool_context:
+            # Get session ID from tool context
+            session_id = getattr(tool_context, 'session_id', 'default')
+            
+            # Extract user_id from tool context if not provided
+            if not user_id:
+                user_id = getattr(tool_context, 'user_id', None)
+                # Try alternative attribute names
+                if not user_id:
+                    for attr in ['userId', 'user', '_user_id', 'current_user']:
+                        if hasattr(tool_context, attr):
+                            alt_user = getattr(tool_context, attr)
+                            if alt_user:
+                                user_id = alt_user
+                                break
+            
+            # Extract JID from tool context if not provided  
+            # In WhatsApp context, user_id IS the JID (e.g., "6592377976@s.whatsapp.net")
+            if not jid and user_id and '@' in str(user_id):
+                jid = user_id  # WhatsApp JID is the user_id
+        else:
+            session_id = 'default'
         
         # Prepare FAL.ai parameters
         parameters = {
@@ -1067,6 +1088,9 @@ async def generate_video_long_running(
         
         if not fal_request_id:
             raise Exception("FAL.ai did not return a request_id")
+        
+        # Log extracted user information for debugging
+        logger.info(f"🔍 Video generation context: user_id={user_id}, jid={jid}, session_id={session_id}")
         
         # Store operation details for polling
         operation_details = {
