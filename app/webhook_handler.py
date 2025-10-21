@@ -165,10 +165,10 @@ class WebhookHandler:
             logger.error(f"❌ Context not found for request: {request_id}")
             raise HTTPException(status_code=404, detail="Request context not found")
         
-        # Process based on status
-        if webhook_data.status == "COMPLETED":
+        # Process based on status (handle multiple possible success values)
+        if webhook_data.status in ["COMPLETED", "DONE", "OK", "SUCCESS"]:
             await self._handle_completion(context, webhook_data)
-        elif webhook_data.status == "FAILED":
+        elif webhook_data.status in ["FAILED", "ERROR"]:
             await self._handle_failure(context, webhook_data)
         elif webhook_data.status == "IN_PROGRESS":
             await self._handle_progress(context, webhook_data)
