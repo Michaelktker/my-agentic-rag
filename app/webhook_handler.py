@@ -205,27 +205,54 @@ class WebhookHandler:
                 if video_url:
                     logger.info(f"📹 Got video URL from webhook data: {video_url}")
             
-            # If not in webhook data, fetch from response URL
-            if not video_url and (webhook_data.response_url or context.response_url):
-                response_url = str(webhook_data.response_url) if webhook_data.response_url else context.response_url
-                logger.info(f"🔍 Fetching from response URL: {response_url}")
-                final_result = await self._fetch_final_result(response_url)
-                if final_result:
-                    logger.info(f"🔍 Final result keys: {list(final_result.keys()) if isinstance(final_result, dict) else 'Not a dict'}")
-                    # Try different possible fields for the video URL
-                    video_url = (
-                        final_result.get("url") or 
-                        final_result.get("video_url") or
-                        final_result.get("video") or
-                        final_result.get("output", {}).get("url") if isinstance(final_result.get("output"), dict) else None or
-                        final_result.get("data", {}).get("url") if isinstance(final_result.get("data"), dict) else None
-                    )
-                    if video_url:
-                        logger.info(f"📹 Got video URL from response: {video_url}")
+            # If not in webhook data, fetch from stored URLs in context
+            if not video_url:
+                # Try response_url first (webhook or stored context)
+                response_url = None
+                if webhook_data.response_url:
+                    response_url = str(webhook_data.response_url)
+                    logger.info(f"🌐 Using response URL from webhook: {response_url}")
+                elif context.response_url:
+                    response_url = context.response_url
+                    logger.info(f"🌐 Using response URL from stored context: {response_url}")
+                
+                if response_url:
+                    logger.info(f"🔍 Fetching from response URL: {response_url}")
+                    final_result = await self._fetch_final_result(response_url)
+                    if final_result:
+                        logger.info(f"🔍 Final result keys: {list(final_result.keys()) if isinstance(final_result, dict) else 'Not a dict'}")
+                        # Try different possible fields for the video URL
+                        video_url = (
+                            final_result.get("url") or 
+                            final_result.get("video_url") or
+                            final_result.get("video") or
+                            final_result.get("output", {}).get("url") if isinstance(final_result.get("output"), dict) else None or
+                            final_result.get("data", {}).get("url") if isinstance(final_result.get("data"), dict) else None
+                        )
+                        if video_url:
+                            logger.info(f"📹 Got video URL from response: {video_url}")
+                        else:
+                            logger.error(f"❌ No video URL found in response data: {final_result}")
                     else:
-                        logger.error(f"❌ No video URL found in response data: {final_result}")
-                else:
-                    logger.error(f"❌ Failed to fetch final result from: {response_url}")
+                        logger.error(f"❌ Failed to fetch final result from: {response_url}")
+                
+                # If still no video URL and we have status URL, try that as fallback
+                if not video_url and context.status_url:
+                    logger.info(f"🔄 Trying status URL as fallback: {context.status_url}")
+                    try:
+                        status_result = await self._fetch_final_result(context.status_url)
+                        if status_result:
+                            video_url = (
+                                status_result.get("url") or 
+                                status_result.get("video_url") or
+                                status_result.get("video") or
+                                status_result.get("output", {}).get("url") if isinstance(status_result.get("output"), dict) else None or
+                                status_result.get("data", {}).get("url") if isinstance(status_result.get("data"), dict) else None
+                            )
+                            if video_url:
+                                logger.info(f"✅ Retrieved video URL from status: {video_url}")
+                    except Exception as status_error:
+                        logger.error(f"❌ Status URL fallback failed: {str(status_error)}")
             
             if video_url:
                 # Send completion message to WhatsApp user
@@ -291,15 +318,35 @@ class WebhookHandler:
     async def _fetch_final_result(self, response_url: str) -> Optional[Dict[str, Any]]:
         """Fetch final result from FAL.ai response URL"""
         try:
+            logger.info(f"🔍 Fetching from response URL: {response_url}")
+            
+            # Get FAL.ai API key
+            fal_api_key = os.getenv("FAL_KEY")
+            if not fal_api_key:
+                logger.error("❌ FAL_KEY environment variable not set")
+                return None
+            
+            headers = {
+                "Authorization": f"Key {fal_api_key}",
+                "Content-Type": "application/json"
+            }
+            
             async with aiohttp.ClientSession() as session:
-                async with session.get(response_url) as response:
+                async with session.get(response_url, headers=headers) as response:
                     if response.status == 200:
-                        return await response.json()
+                        result = await response.json()
+                        logger.info(f"✅ Successfully fetched result from FAL.ai")
+                        logger.debug(f"🔍 FAL.ai result: {result}")
+                        return result
                     else:
+                        error_text = await response.text()
                         logger.error(f"❌ Error fetching result: {response.status}")
+                        logger.error(f"❌ Error details: {error_text}")
                         return None
+                        
         except Exception as e:
-            logger.error(f"❌ Error fetching final result: {e}")
+            logger.error(f"❌ Exception fetching final result from: {response_url}")
+            logger.error(f"❌ Exception details: {e}")
             return None
     
     async def _send_whatsapp_message(self, jid: str, message: str):
