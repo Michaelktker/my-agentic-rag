@@ -158,6 +158,7 @@ class WebhookHandler:
         """Handle incoming webhook callback from FAL.ai"""
         logger.info(f"📨 Webhook callback received for request: {request_id}")
         logger.info(f"📊 Status: {webhook_data.status}")
+        logger.info(f"🔍 DEBUG - Full webhook data: {webhook_data.dict()}")
         
         # Get context from memory or GCS
         context = await self._get_context(request_id)
@@ -183,21 +184,48 @@ class WebhookHandler:
             # Try to get video URL from multiple sources
             video_url = None
             
-            # First try from webhook data if it has the URL
-            if hasattr(webhook_data, 'data') and webhook_data.data and 'url' in webhook_data.data:
-                video_url = webhook_data.data['url']
-                logger.info(f"📹 Got video URL from webhook data: {video_url}")
+            # Debug: Log webhook data structure
+            logger.info(f"🔍 Webhook has data: {webhook_data.data is not None}")
+            if webhook_data.data:
+                logger.info(f"🔍 Data keys: {list(webhook_data.data.keys()) if isinstance(webhook_data.data, dict) else 'Not a dict'}")
+            
+            # First try from webhook data - check various possible structures
+            if webhook_data.data:
+                data = webhook_data.data
+                # Try various common video URL field names
+                video_url = (
+                    data.get('url') or
+                    data.get('video_url') or 
+                    data.get('video') or
+                    data.get('output', {}).get('url') if isinstance(data.get('output'), dict) else None or
+                    data.get('output', {}).get('video_url') if isinstance(data.get('output'), dict) else None or
+                    data.get('result', {}).get('url') if isinstance(data.get('result'), dict) else None or
+                    data.get('result', {}).get('video_url') if isinstance(data.get('result'), dict) else None
+                )
+                if video_url:
+                    logger.info(f"📹 Got video URL from webhook data: {video_url}")
             
             # If not in webhook data, fetch from response URL
-            elif webhook_data.response_url or context.response_url:
+            if not video_url and (webhook_data.response_url or context.response_url):
                 response_url = str(webhook_data.response_url) if webhook_data.response_url else context.response_url
+                logger.info(f"🔍 Fetching from response URL: {response_url}")
                 final_result = await self._fetch_final_result(response_url)
                 if final_result:
+                    logger.info(f"🔍 Final result keys: {list(final_result.keys()) if isinstance(final_result, dict) else 'Not a dict'}")
                     # Try different possible fields for the video URL
-                    video_url = (final_result.get("url") or 
-                               final_result.get("video_url") or
-                               final_result.get("data", {}).get("url") if isinstance(final_result.get("data"), dict) else None)
-                    logger.info(f"📹 Got video URL from response: {video_url}")
+                    video_url = (
+                        final_result.get("url") or 
+                        final_result.get("video_url") or
+                        final_result.get("video") or
+                        final_result.get("output", {}).get("url") if isinstance(final_result.get("output"), dict) else None or
+                        final_result.get("data", {}).get("url") if isinstance(final_result.get("data"), dict) else None
+                    )
+                    if video_url:
+                        logger.info(f"📹 Got video URL from response: {video_url}")
+                    else:
+                        logger.error(f"❌ No video URL found in response data: {final_result}")
+                else:
+                    logger.error(f"❌ Failed to fetch final result from: {response_url}")
             
             if video_url:
                 # Send completion message to WhatsApp user
