@@ -1036,18 +1036,26 @@ async def generate_video_long_running(
         if not fal_api_key:
             raise Exception("FAL_KEY environment variable not set")
         
-        # Make direct FAL.ai API call for queue submission
+        # Create webhook URL for FAL.ai callback
+        webhook_base_url = os.getenv("WEBHOOK_BASE_URL", "https://my-agentic-rag-454188184539.us-central1.run.app")
+        webhook_url = f"{webhook_base_url}/webhook/fal/{operation_id}"
+        
+        # Make direct FAL.ai API call for queue submission WITH WEBHOOK
         async with aiohttp.ClientSession() as session:
             headers = {
                 "Authorization": f"Key {fal_api_key}",
                 "Content-Type": "application/json"
             }
             
-            fal_url = f"https://queue.fal.run/{model_name}"
+            # Include webhook URL as query parameter (FAL.ai requirement)
+            fal_url = f"https://queue.fal.run/{model_name}?fal_webhook={webhook_url}"
+            
+            logger.info(f"🎬 Starting video generation with webhook: {webhook_url}")
             
             async with session.post(fal_url, json=parameters, headers=headers) as response:
                 if response.status == 200:
                     fal_response = await response.json()
+                    logger.info(f"✅ FAL.ai accepted request with webhook callback")
                 else:
                     error_text = await response.text()
                     raise Exception(f"FAL.ai API error {response.status}: {error_text}")
@@ -1072,11 +1080,29 @@ async def generate_video_long_running(
             "user_id": user_id or "unknown",
             "jid": jid or "unknown",
             "session_id": session_id,
-            "created_at": asyncio.get_event_loop().time()
+            "created_at": asyncio.get_event_loop().time(),
+            "webhook_url": webhook_url
         }
         
         # Store in GCS for persistence across sessions
         await _store_operation_details(operation_id, operation_details)
+        
+        # Register webhook context for callback handling
+        try:
+            from app.webhook_handler import webhook_handler
+            await webhook_handler.register_video_generation(
+                request_id=operation_id,
+                user_id=user_id or "unknown",
+                session_id=session_id,
+                jid=jid or "unknown",
+                model_name=model_name,
+                prompt=prompt,
+                status_url=status_url or "",
+                response_url=response_url or ""
+            )
+            logger.info(f"📡 Registered webhook context for operation: {operation_id}")
+        except Exception as webhook_error:
+            logger.warning(f"⚠️ Could not register webhook (will fallback to polling): {webhook_error}")
         
         # Return operation details - this pauses the agent run
         return operation_details

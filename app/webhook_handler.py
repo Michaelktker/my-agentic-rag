@@ -23,6 +23,10 @@ WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "https://my-agentic-rag-4541881
 WHATSAPP_BOT_URL = os.getenv("WHATSAPP_BOT_URL", "http://localhost:3000")
 BUCKET_NAME = os.getenv("BUCKET_NAME", "whatsapp-bot-auth")
 
+# Ensure the webhook base URL is complete
+if WEBHOOK_BASE_URL and not WEBHOOK_BASE_URL.startswith('http'):
+    WEBHOOK_BASE_URL = f"https://{WEBHOOK_BASE_URL}"
+
 # Initialize GCS
 storage_client = storage.Client()
 bucket = storage_client.bucket(BUCKET_NAME)
