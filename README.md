@@ -161,15 +161,21 @@ We've resolved critical deployment issues that were preventing production deploy
 
 ### Prerequisites
 
-1. **Google Cloud Setup**:
+1. **Development Environment Setup**:
+   ```bash
+   # Quick setup script for Terraform and Google Cloud CLI
+   ./setup-dev-environment.sh
+   ```
+
+2. **Google Cloud Setup**:
    ```bash
    gcloud auth application-default login
    gcloud config set project production-adk
    ```
 
-2. **Node.js**: Version 18+ for WhatsApp bot
-3. **Python**: 3.9+ for ADK server
-4. **Required Services**:
+3. **Node.js**: Version 18+ for WhatsApp bot
+4. **Python**: 3.9+ for ADK server
+5. **Required Services**:
    - ADK service running on Google Cloud Run
    - GCS buckets: `gs://authstate`, `gs://adk_artifact`
    - Vertex AI Search configured
