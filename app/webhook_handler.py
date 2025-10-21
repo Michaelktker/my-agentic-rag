@@ -196,7 +196,8 @@ class WebhookHandler:
                 video_url = (
                     data.get('url') or
                     data.get('video_url') or 
-                    data.get('video') or
+                    data.get('video', {}).get('url') if isinstance(data.get('video'), dict) else None or
+                    data.get('video') if isinstance(data.get('video'), str) else None or
                     data.get('output', {}).get('url') if isinstance(data.get('output'), dict) else None or
                     data.get('output', {}).get('video_url') if isinstance(data.get('output'), dict) else None or
                     data.get('result', {}).get('url') if isinstance(data.get('result'), dict) else None or
@@ -225,9 +226,12 @@ class WebhookHandler:
                         video_url = (
                             final_result.get("url") or 
                             final_result.get("video_url") or
-                            final_result.get("video") or
+                            final_result.get("video", {}).get("url") if isinstance(final_result.get("video"), dict) else None or
+                            final_result.get("video") if isinstance(final_result.get("video"), str) else None or
                             final_result.get("output", {}).get("url") if isinstance(final_result.get("output"), dict) else None or
-                            final_result.get("data", {}).get("url") if isinstance(final_result.get("data"), dict) else None
+                            final_result.get("output", {}).get("video_url") if isinstance(final_result.get("output"), dict) else None or
+                            final_result.get("data", {}).get("url") if isinstance(final_result.get("data"), dict) else None or
+                            final_result.get("data", {}).get("video_url") if isinstance(final_result.get("data"), dict) else None
                         )
                         if video_url:
                             logger.info(f"📹 Got video URL from response: {video_url}")
@@ -245,9 +249,12 @@ class WebhookHandler:
                             video_url = (
                                 status_result.get("url") or 
                                 status_result.get("video_url") or
-                                status_result.get("video") or
+                                status_result.get("video", {}).get("url") if isinstance(status_result.get("video"), dict) else None or
+                                status_result.get("video") if isinstance(status_result.get("video"), str) else None or
                                 status_result.get("output", {}).get("url") if isinstance(status_result.get("output"), dict) else None or
-                                status_result.get("data", {}).get("url") if isinstance(status_result.get("data"), dict) else None
+                                status_result.get("output", {}).get("video_url") if isinstance(status_result.get("output"), dict) else None or
+                                status_result.get("data", {}).get("url") if isinstance(status_result.get("data"), dict) else None or
+                                status_result.get("data", {}).get("video_url") if isinstance(status_result.get("data"), dict) else None
                             )
                             if video_url:
                                 logger.info(f"✅ Retrieved video URL from status: {video_url}")
