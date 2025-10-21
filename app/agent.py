@@ -1010,27 +1010,30 @@ async def generate_video_long_running(
         # Generate unique operation ID
         operation_id = f"video_gen_{uuid.uuid4().hex[:12]}"
         
-        # Extract user information from tool context if not provided
+        # Extract user information from tool context if not provided or if using test values
         if tool_context:
             # Get session ID from tool context
             session_id = getattr(tool_context, 'session_id', 'default')
             
-            # Extract user_id from tool context if not provided
-            if not user_id:
-                user_id = getattr(tool_context, 'user_id', None)
+            # Extract user_id from tool context if not provided or if it's a test value
+            if not user_id or user_id == "test_user":
+                context_user_id = getattr(tool_context, 'user_id', None)
                 # Try alternative attribute names
-                if not user_id:
+                if not context_user_id:
                     for attr in ['userId', 'user', '_user_id', 'current_user']:
                         if hasattr(tool_context, attr):
                             alt_user = getattr(tool_context, attr)
                             if alt_user:
-                                user_id = alt_user
+                                context_user_id = alt_user
                                 break
+                if context_user_id:
+                    user_id = context_user_id
             
-            # Extract JID from tool context if not provided  
+            # Extract JID from tool context if not provided or if it's a test value
             # In WhatsApp context, user_id IS the JID (e.g., "6592377976@s.whatsapp.net")
-            if not jid and user_id and '@' in str(user_id):
-                jid = user_id  # WhatsApp JID is the user_id
+            if not jid or jid == "test_jid":
+                if user_id and '@' in str(user_id):
+                    jid = user_id  # WhatsApp JID is the user_id
         else:
             session_id = 'default'
         
