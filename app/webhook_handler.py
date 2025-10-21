@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "https://my-agentic-rag-454188184539.us-central1.run.app")
 WHATSAPP_BOT_URL = os.getenv("WHATSAPP_BOT_URL", "http://localhost:3000")
-BUCKET_NAME = os.getenv("BUCKET_NAME", "whatsapp-bot-auth")
+BUCKET_NAME = os.getenv("BUCKET_NAME", os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact"))
 
 # Ensure the webhook base URL is complete
 if WEBHOOK_BASE_URL and not WEBHOOK_BASE_URL.startswith('http'):
