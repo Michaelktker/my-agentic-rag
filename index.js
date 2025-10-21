@@ -1376,6 +1376,7 @@ class WhatsAppBot {
                 appName: ADK_APP_NAME,
                 userId: userId,
                 sessionId: sessionId,
+                jid: jid, // Include WhatsApp JID for webhook notifications
                 newMessage: {
                     parts: parts,
                     role: "user"
@@ -1847,8 +1848,8 @@ class WhatsAppBot {
      */
     async processWebhookMessages() {
         try {
-            // List outbound messages from GCS
-            const [files] = await bucket.getFiles({
+            // List outbound messages from GCS (use artifactsBucket where webhook handler stores them)
+            const [files] = await artifactsBucket.getFiles({
                 prefix: 'outbound_messages/',
                 maxResults: 10 // Process up to 10 messages per poll
             });

@@ -637,7 +637,7 @@ For long-running video generation:
 User gets automatic WhatsApp notification when video completes.
 """
 
-instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis, PLUS image generation via multiple sources.
+instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis, PLUS image generation and editing via multiple sources.
 
 Answer to the best of your ability using the context provided and leverage the tools available to you.
 
@@ -650,22 +650,48 @@ You have access to several specialized capabilities:
    - Video generation capabilities (Stable Video Diffusion, etc.)
    - Model discovery and schema inspection
    - Both direct and queued generation for long-running tasks
-5. **Artifact management** for handling media files uploaded by users:
+5. **Long-running generation tools** with webhook callbacks:
+   - generate_video_long_running: Async video generation with WhatsApp notification
+   - generate_image_long_running: Async image generation with WhatsApp notification  
+   - edit_image_long_running: Async image editing with WhatsApp notification
+6. **Image editing capabilities** using edit_image_with_fal:
+   - Edit existing images with natural language prompts
+   - Users can specify any FAL.ai image editing model they prefer
+   - Common models: Alibaba/qwen-image-edit, fal-ai/flux-pro-v1.1-ultra, etc.
+   - Requires public image URLs (use make_artifact_public first)
+   - Fast processing without queuing
+7. **Artifact management** for handling media files uploaded by users:
    - list_user_artifacts: See what media files users have uploaded
    - load_and_analyze_artifact: Load and analyze specific media files
    - save_analysis_result: Save your analysis results back as artifacts
    - make_artifact_public: Make GCS artifacts publicly accessible for fal.ai processing
 
 **Image Generation Guidelines:**
-- **All image generation is handled through fal.ai models** via the fal.ai agent
+- **For long-running image generation**: Use generate_image_long_running for webhook-based async processing
+- **For fast image generation**: Use the fal.ai agent directly for immediate results
+- **All image generation** is handled through fal.ai models
 - Users specify which models to use, or can discover available models
-- Use the fal.ai agent to discover available models with the `models` tool
-- Check model schemas before generation to understand required parameters
 - Generated images are automatically saved as artifacts and included in responses
 - Handle generation errors gracefully with alternative model suggestions
 
+**Image Editing Guidelines:**
+- **For long-running image editing**: Use edit_image_long_running for webhook-based async processing  
+- **For fast image editing**: Use edit_image_with_fal for immediate results
+- **Let users choose their preferred model** - ask what image editing model they want to use
+- **Popular models**: Alibaba/qwen-image-edit, fal-ai/flux-pro-v1.1-ultra, fal-ai/recraft-v3, etc.
+- **ALWAYS make images public first** using make_artifact_public before editing
+- **Use clear, descriptive prompts** for the desired edits
+- **Handle errors gracefully** with helpful suggestions for users
+
+**Video Generation Guidelines:**
+- **Always use generate_video_long_running** for video generation (videos take time)
+- **Webhook-based processing**: Users get immediate confirmation and notification when ready
+- **Support any FAL.ai video model** that users specify
+- **Handle errors gracefully** with helpful suggestions for users
+
 **fal.ai Generation Capabilities:**
 - **Image Generation**: Use models specified by user or discovered through model search
+- **Image Editing**: Use edit_image_with_fal with user's preferred model (ask them to specify)
 - **Video Generation**: Use whatever video model the user explicitly requests
 - **Model Discovery**: Use the fal.ai agent to list and search available models
 - **Schema Inspection**: Always check model schemas before generation
@@ -1012,6 +1038,16 @@ async def generate_video_long_running(
         
         # Extract user information from tool context if not provided or if using test values
         if tool_context:
+            # Debug logging - check all tool_context attributes
+            logger.info(f"🔍 Tool context type: {type(tool_context)}")
+            logger.info(f"🔍 Tool context attributes: {dir(tool_context)}")
+            
+            # Try to extract all possible user-related attributes
+            for attr in ['user_id', 'userId', 'user', '_user_id', 'current_user', 'session_id', 'sessionId', '_session_id']:
+                if hasattr(tool_context, attr):
+                    value = getattr(tool_context, attr)
+                    logger.info(f"🔍 tool_context.{attr} = {value}")
+                    
             # Get session ID from tool context
             session_id = getattr(tool_context, 'session_id', 'default')
             
@@ -1029,11 +1065,12 @@ async def generate_video_long_running(
                 if context_user_id:
                     user_id = context_user_id
             
-            # Extract JID from tool context if not provided or if it's a test value
             # In WhatsApp context, user_id IS the JID (e.g., "6592377976@s.whatsapp.net")
-            if not jid or jid == "test_jid":
-                if user_id and '@' in str(user_id):
-                    jid = user_id  # WhatsApp JID is the user_id
+            # Always set jid = user_id since they are the same in WhatsApp bot
+            if user_id:
+                jid = user_id
+            elif not jid or jid == "test_jid":
+                jid = "unknown"
         else:
             session_id = 'default'
         
@@ -1516,6 +1553,447 @@ websearch_agent = Agent(
 # Create AgentTool from the web search agent
 websearch_tool = AgentTool(agent=websearch_agent)
 
+async def generate_image_long_running(
+    model_name: str,
+    prompt: str,
+    user_id: Optional[str] = None,
+    jid: Optional[str] = None,
+    tool_context: Optional[ToolContext] = None,
+    **kwargs
+) -> dict:
+    """
+    Start long-running image generation using FAL.ai with webhook callback.
+    
+    This is a LongRunningFunctionTool that:
+    1. Initiates image generation with FAL.ai
+    2. Returns immediately with operation details
+    3. Pauses the agent run for client polling
+    
+    Args:
+        model_name (str): FAL.ai model (e.g., "fal-ai/flux/dev", "black-forest-labs/flux.1")
+        prompt (str): Image generation prompt
+        user_id (Optional[str]): User identifier for tracking
+        jid (Optional[str]): WhatsApp JID for final notification
+        **kwargs: Additional model-specific parameters
+        
+    Returns:
+        dict: Operation details for polling
+    """
+    try:
+        # Generate unique operation ID
+        operation_id = f"image_gen_{uuid.uuid4().hex[:12]}"
+        
+        # Extract user information from tool context if not provided
+        if tool_context:
+            # Debug logging - check all tool_context attributes
+            logger.info(f"🔍 Tool context type: {type(tool_context)}")
+            logger.info(f"🔍 Tool context attributes: {dir(tool_context)}")
+            
+            # Try to extract all possible user-related attributes
+            for attr in ['user_id', 'userId', 'user', '_user_id', 'current_user', 'session_id', 'sessionId', '_session_id']:
+                if hasattr(tool_context, attr):
+                    value = getattr(tool_context, attr)
+                    logger.info(f"🔍 tool_context.{attr} = {value}")
+                    
+            # Get session ID from tool context
+            session_id = getattr(tool_context, 'session_id', 'default')
+            
+            # Extract user_id from tool context if not provided
+            if not user_id or user_id == "test_user":
+                context_user_id = getattr(tool_context, 'user_id', None)
+                if not context_user_id:
+                    for attr in ['userId', 'user', '_user_id', 'current_user']:
+                        if hasattr(tool_context, attr):
+                            alt_user = getattr(tool_context, attr)
+                            if alt_user:
+                                context_user_id = alt_user
+                                break
+                if context_user_id:
+                    user_id = context_user_id
+            
+            # In WhatsApp context, user_id IS the JID
+            if user_id:
+                jid = user_id
+            elif not jid or jid == "test_jid":
+                jid = "unknown"
+        else:
+            session_id = 'default'
+        
+        # Prepare FAL.ai parameters
+        parameters = {
+            "prompt": prompt
+        }
+        
+        # Add any additional parameters from kwargs
+        parameters.update(kwargs)
+        
+        # Add model-specific default parameters
+        if "flux" in model_name.lower():
+            parameters.setdefault("width", 1024)
+            parameters.setdefault("height", 1024)
+            parameters.setdefault("num_inference_steps", 28)
+            parameters.setdefault("guidance_scale", 3.5)
+        elif "sdxl" in model_name.lower():
+            parameters.setdefault("width", 1024)
+            parameters.setdefault("height", 1024)
+            parameters.setdefault("num_inference_steps", 50)
+            parameters.setdefault("guidance_scale", 7.5)
+        
+        # Get FAL API key
+        fal_api_key = os.getenv("FAL_KEY")
+        if not fal_api_key:
+            raise Exception("FAL_KEY environment variable not set")
+        
+        # Create webhook URL for FAL.ai callback
+        webhook_base_url = os.getenv("WEBHOOK_BASE_URL", "https://my-agentic-rag-454188184539.us-central1.run.app")
+        webhook_url = f"{webhook_base_url}/webhook/fal/{operation_id}"
+        
+        # Make direct FAL.ai API call for queue submission WITH WEBHOOK
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                "Authorization": f"Key {fal_api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            # Include webhook URL as query parameter (FAL.ai requirement)
+            fal_url = f"https://queue.fal.run/{model_name}?fal_webhook={webhook_url}"
+            
+            logger.info(f"🎨 Starting image generation with webhook: {webhook_url}")
+            
+            async with session.post(fal_url, json=parameters, headers=headers) as response:
+                if response.status == 200:
+                    fal_response = await response.json()
+                    logger.info(f"✅ FAL.ai accepted image generation request with webhook callback")
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"FAL.ai API error {response.status}: {error_text}")
+        
+        # Extract FAL.ai response details
+        fal_request_id = fal_response.get('request_id')
+        status_url = fal_response.get('status_url')
+        response_url = fal_response.get('response_url')
+        
+        if not fal_request_id:
+            raise Exception("FAL.ai did not return a request_id")
+        
+        # Log extracted user information for debugging
+        logger.info(f"🔍 Image generation context: user_id={user_id}, jid={jid}, session_id={session_id}")
+        
+        # Store operation details for polling
+        operation_details = {
+            "operation_id": operation_id,
+            "status": "IN_PROGRESS",
+            "model_name": model_name,
+            "prompt": prompt,
+            "fal_request_id": fal_request_id,
+            "status_url": status_url,
+            "response_url": response_url,
+            "user_id": user_id or "unknown",
+            "jid": jid or "unknown",
+            "session_id": session_id,
+            "created_at": asyncio.get_event_loop().time(),
+            "webhook_url": webhook_url,
+            "operation_type": "image_generation"
+        }
+        
+        # Store in GCS for persistence across sessions
+        await _store_operation_details(operation_id, operation_details)
+        
+        # Register webhook context for callback handling
+        try:
+            from app.webhook_handler import webhook_handler
+            await webhook_handler.register_image_generation(
+                request_id=operation_id,
+                user_id=user_id or "unknown",
+                session_id=session_id,
+                jid=jid or "unknown",
+                model_name=model_name,
+                prompt=prompt,
+                status_url=status_url or "",
+                response_url=response_url or ""
+            )
+            logger.info(f"📡 Registered webhook context for image generation: {operation_id}")
+        except Exception as webhook_error:
+            logger.warning(f"⚠️ Could not register webhook (will fallback to polling): {webhook_error}")
+        
+        # Return operation details - this pauses the agent run
+        return operation_details
+        
+    except Exception as e:
+        logger.error(f"❌ Error starting image generation: {e}")
+        return {
+            "operation_id": f"failed_{uuid.uuid4().hex[:8]}",
+            "status": "FAILED",
+            "error": str(e),
+            "model_name": model_name,
+            "prompt": prompt
+        }
+
+
+async def edit_image_long_running(
+    image_url: str,
+    prompt: str,
+    model_name: str = "Alibaba/qwen-image-edit",
+    user_id: Optional[str] = None,
+    jid: Optional[str] = None,
+    tool_context: Optional[ToolContext] = None,
+    **kwargs
+) -> dict:
+    """
+    Start long-running image editing using FAL.ai with webhook callback.
+    
+    This is a LongRunningFunctionTool that:
+    1. Initiates image editing with FAL.ai
+    2. Returns immediately with operation details
+    3. Pauses the agent run for client polling
+    
+    Args:
+        image_url (str): Public URL of the image to edit
+        prompt (str): Description of the edits to make
+        model_name (str): FAL.ai image editing model to use
+        user_id (Optional[str]): User identifier for tracking
+        jid (Optional[str]): WhatsApp JID for final notification
+        **kwargs: Additional model-specific parameters
+        
+    Returns:
+        dict: Operation details for polling
+    """
+    try:
+        # Generate unique operation ID
+        operation_id = f"image_edit_{uuid.uuid4().hex[:12]}"
+        
+        # Extract user information from tool context if not provided
+        if tool_context:
+            # Debug logging - check all tool_context attributes
+            logger.info(f"🔍 Tool context type: {type(tool_context)}")
+            logger.info(f"🔍 Tool context attributes: {dir(tool_context)}")
+            
+            # Try to extract all possible user-related attributes
+            for attr in ['user_id', 'userId', 'user', '_user_id', 'current_user', 'session_id', 'sessionId', '_session_id']:
+                if hasattr(tool_context, attr):
+                    value = getattr(tool_context, attr)
+                    logger.info(f"🔍 tool_context.{attr} = {value}")
+                    
+            # Get session ID from tool context
+            session_id = getattr(tool_context, 'session_id', 'default')
+            
+            # Extract user_id from tool context if not provided
+            if not user_id or user_id == "test_user":
+                context_user_id = getattr(tool_context, 'user_id', None)
+                if not context_user_id:
+                    for attr in ['userId', 'user', '_user_id', 'current_user']:
+                        if hasattr(tool_context, attr):
+                            alt_user = getattr(tool_context, attr)
+                            if alt_user:
+                                context_user_id = alt_user
+                                break
+                if context_user_id:
+                    user_id = context_user_id
+            
+            # In WhatsApp context, user_id IS the JID
+            if user_id:
+                jid = user_id
+            elif not jid or jid == "test_jid":
+                jid = "unknown"
+        else:
+            session_id = 'default'
+        
+        # Prepare FAL.ai parameters
+        parameters = {
+            "image_url": image_url,
+            "prompt": prompt
+        }
+        
+        # Add any additional parameters from kwargs
+        parameters.update(kwargs)
+        
+        # Add model-specific default parameters
+        if "qwen" in model_name.lower():
+            parameters.setdefault("creativity", 0.8)
+            parameters.setdefault("similarity", 0.8)
+        elif "flux" in model_name.lower():
+            parameters.setdefault("guidance_scale", 7.5)
+        
+        # Get FAL API key
+        fal_api_key = os.getenv("FAL_KEY")
+        if not fal_api_key:
+            raise Exception("FAL_KEY environment variable not set")
+        
+        # Create webhook URL for FAL.ai callback
+        webhook_base_url = os.getenv("WEBHOOK_BASE_URL", "https://my-agentic-rag-454188184539.us-central1.run.app")
+        webhook_url = f"{webhook_base_url}/webhook/fal/{operation_id}"
+        
+        # Make direct FAL.ai API call for queue submission WITH WEBHOOK
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                "Authorization": f"Key {fal_api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            # Include webhook URL as query parameter (FAL.ai requirement)
+            fal_url = f"https://queue.fal.run/{model_name}?fal_webhook={webhook_url}"
+            
+            logger.info(f"🎨 Starting image editing with webhook: {webhook_url}")
+            
+            async with session.post(fal_url, json=parameters, headers=headers) as response:
+                if response.status == 200:
+                    fal_response = await response.json()
+                    logger.info(f"✅ FAL.ai accepted image editing request with webhook callback")
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"FAL.ai API error {response.status}: {error_text}")
+        
+        # Extract FAL.ai response details
+        fal_request_id = fal_response.get('request_id')
+        status_url = fal_response.get('status_url')
+        response_url = fal_response.get('response_url')
+        
+        if not fal_request_id:
+            raise Exception("FAL.ai did not return a request_id")
+        
+        # Log extracted user information for debugging
+        logger.info(f"🔍 Image editing context: user_id={user_id}, jid={jid}, session_id={session_id}")
+        
+        # Store operation details for polling
+        operation_details = {
+            "operation_id": operation_id,
+            "status": "IN_PROGRESS",
+            "model_name": model_name,
+            "prompt": prompt,
+            "image_url": image_url,
+            "fal_request_id": fal_request_id,
+            "status_url": status_url,
+            "response_url": response_url,
+            "user_id": user_id or "unknown",
+            "jid": jid or "unknown",
+            "session_id": session_id,
+            "created_at": asyncio.get_event_loop().time(),
+            "webhook_url": webhook_url,
+            "operation_type": "image_editing"
+        }
+        
+        # Store in GCS for persistence across sessions
+        await _store_operation_details(operation_id, operation_details)
+        
+        # Register webhook context for callback handling
+        try:
+            from app.webhook_handler import webhook_handler
+            await webhook_handler.register_image_editing(
+                request_id=operation_id,
+                user_id=user_id or "unknown",
+                session_id=session_id,
+                jid=jid or "unknown",
+                model_name=model_name,
+                prompt=prompt,
+                image_url=image_url,
+                status_url=status_url or "",
+                response_url=response_url or ""
+            )
+            logger.info(f"📡 Registered webhook context for image editing: {operation_id}")
+        except Exception as webhook_error:
+            logger.warning(f"⚠️ Could not register webhook (will fallback to polling): {webhook_error}")
+        
+        # Return operation details - this pauses the agent run
+        return operation_details
+        
+    except Exception as e:
+        logger.error(f"❌ Error starting image editing: {e}")
+        return {
+            "operation_id": f"failed_{uuid.uuid4().hex[:8]}",
+            "status": "FAILED",
+            "error": str(e),
+            "model_name": model_name,
+            "prompt": prompt,
+            "image_url": image_url
+        }
+
+
+async def edit_image_with_fal(
+    image_url: str,
+    prompt: str,
+    model_name: str = "Alibaba/qwen-image-edit",
+    tool_context: Optional[ToolContext] = None
+) -> str:
+    """
+    Edit an image using any FAL.ai image editing model specified by the user.
+    
+    Args:
+        image_url (str): Public URL of the image to edit
+        prompt (str): Description of the edits to make
+        model_name (str): FAL.ai image editing model to use (user's choice)
+        tool_context (Optional[ToolContext]): Tool context for session information
+        
+    Returns:
+        str: Result message with edited image URL or error message
+    """
+    try:
+        # Import FAL MCP tools
+        import aiohttp
+        import os
+        
+        # Get FAL API key
+        fal_api_key = os.getenv("FAL_KEY")
+        if not fal_api_key:
+            return "❌ Error: FAL_KEY environment variable not set"
+        
+        # Prepare parameters for image editing
+        parameters = {
+            "image_url": image_url,
+            "prompt": prompt
+        }
+        
+        # Add common optional parameters that work with most image editing models
+        if "qwen" in model_name.lower():
+            # Qwen image edit specific parameters
+            parameters.setdefault("creativity", 0.8)
+            parameters.setdefault("similarity", 0.8)
+        elif "flux" in model_name.lower():
+            # Flux models may have different parameter names
+            parameters.setdefault("guidance_scale", 7.5)
+        # For other models, use basic parameters only
+        
+        logger.info(f"🎨 Starting image editing with model: {model_name}")
+        logger.info(f"🎨 Image URL: {image_url}")
+        logger.info(f"🎨 Prompt: {prompt}")
+        
+        # Make direct FAL.ai API call for image editing (FAST - no queue)
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                "Authorization": f"Key {fal_api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            # Use direct endpoint for fast image editing
+            fal_url = f"https://fal.run/{model_name}"
+            
+            async with session.post(fal_url, json=parameters, headers=headers) as response:
+                if response.status == 200:
+                    fal_response = await response.json()
+                    logger.info(f"✅ FAL.ai image editing completed successfully")
+                    
+                    # Extract the result image URL
+                    if "image" in fal_response and "url" in fal_response["image"]:
+                        result_url = fal_response["image"]["url"]
+                        return f"✅ **Image editing completed!**\n\n🎨 **Original:** {image_url}\n🖼️ **Edited:** {result_url}\n\n**Prompt:** {prompt}\n**Model:** {model_name}"
+                    elif "images" in fal_response and len(fal_response["images"]) > 0:
+                        result_url = fal_response["images"][0]["url"]
+                        return f"✅ **Image editing completed!**\n\n🎨 **Original:** {image_url}\n🖼️ **Edited:** {result_url}\n\n**Prompt:** {prompt}\n**Model:** {model_name}"
+                    else:
+                        logger.error(f"❌ Unexpected FAL response format: {fal_response}")
+                        return f"❌ Error: Unexpected response format from FAL.ai. Please try again."
+                else:
+                    error_text = await response.text()
+                    logger.error(f"❌ FAL.ai API error {response.status}: {error_text}")
+                    return f"❌ Error: FAL.ai API error {response.status}: {error_text}"
+        
+    except Exception as e:
+        logger.error(f"❌ Error in image editing: {e}")
+        return f"❌ Error editing image: {str(e)}"
+
+
+# Create image editing tool
+edit_image_tool = FunctionTool(func=edit_image_with_fal)
+
 # Create artifact management tools
 list_artifacts_tool = FunctionTool(func=list_user_artifacts)
 load_artifact_tool = FunctionTool(func=load_and_analyze_artifact)
@@ -1526,14 +2004,20 @@ save_artifact_tool = FunctionTool(func=save_analysis_result)
 # Create artifact public URL tool for fal.ai integration
 make_public_tool = FunctionTool(func=make_artifact_public)
 
-# Create long-running video generation tool (NEW APPROACH)
+# Create long-running video generation tool
 video_generation_tool = LongRunningFunctionTool(func=generate_video_long_running)
+
+# Create long-running image generation tool
+image_generation_tool = LongRunningFunctionTool(func=generate_image_long_running)
+
+# Create long-running image editing tool
+image_editing_tool = LongRunningFunctionTool(func=edit_image_long_running)
 
 # Create webhook registration tool for async video generation (LEGACY - keeping for compatibility)
 register_webhook_tool = FunctionTool(func=register_video_webhook)
 update_webhook_tool = FunctionTool(func=update_webhook_request_id)
 
-tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, make_public_tool, video_generation_tool, register_webhook_tool, update_webhook_tool]
+tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, make_public_tool, edit_image_tool, video_generation_tool, image_generation_tool, image_editing_tool, register_webhook_tool, update_webhook_tool]
 
 root_agent = Agent(
     name="root_agent",

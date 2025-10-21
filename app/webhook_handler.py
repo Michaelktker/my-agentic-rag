@@ -58,12 +58,45 @@ class VideoGenerationContext(BaseModel):
     webhook_url: str
 
 
+class ImageGenerationContext(BaseModel):
+    """Context for tracking image generation requests"""
+    user_id: str
+    session_id: str
+    jid: str  # WhatsApp JID for sending completion message
+    model_name: str
+    prompt: str
+    request_id: str
+    status_url: str
+    response_url: str
+    created_at: str
+    webhook_url: str
+
+
+class ImageEditingContext(BaseModel):
+    """Context for tracking image editing requests"""
+    user_id: str
+    session_id: str
+    jid: str  # WhatsApp JID for sending completion message
+    model_name: str
+    prompt: str
+    image_url: str  # Original image URL
+    request_id: str
+    status_url: str
+    response_url: str
+    created_at: str
+    webhook_url: str
+
+
 class WebhookHandler:
     """Handles webhook callbacks for long-running tasks"""
     
     def __init__(self):
-        self.pending_requests: Dict[str, VideoGenerationContext] = {}
-        self.webhook_folder = "webhooks/video_generation"
+        self.pending_video_requests: Dict[str, VideoGenerationContext] = {}
+        self.pending_image_requests: Dict[str, ImageGenerationContext] = {}
+        self.pending_edit_requests: Dict[str, ImageEditingContext] = {}
+        self.webhook_folder_video = "webhooks/video_generation"
+        self.webhook_folder_image = "webhooks/image_generation"
+        self.webhook_folder_edit = "webhooks/image_editing"
     
     async def register_video_generation(
         self,
@@ -100,10 +133,98 @@ class WebhookHandler:
         )
         
         # Store in memory and GCS for persistence
-        self.pending_requests[request_id] = context
-        await self._store_context_gcs(request_id, context)
+        self.pending_video_requests[request_id] = context
+        await self._store_context_gcs(request_id, context, "video")
         
         logger.info(f"🎬 Registered video generation: {request_id} for user {user_id}")
+        logger.info(f"📡 Webhook URL: {webhook_url}")
+        
+        return webhook_url
+    
+    async def register_image_generation(
+        self,
+        request_id: str,
+        user_id: str,
+        session_id: str,
+        jid: str,
+        model_name: str,
+        prompt: str,
+        status_url: str,
+        response_url: str
+    ) -> str:
+        """
+        Register a new image generation request for webhook tracking
+        
+        Returns:
+            str: Webhook URL for FAL.ai callback
+        """
+        # Create unique webhook URL for this request
+        webhook_url = f"{WEBHOOK_BASE_URL}/webhook/fal/{request_id}"
+        
+        # Create context
+        context = ImageGenerationContext(
+            user_id=user_id,
+            session_id=session_id,
+            jid=jid,
+            model_name=model_name,
+            prompt=prompt,
+            request_id=request_id,
+            status_url=status_url,
+            response_url=response_url,
+            created_at=str(asyncio.get_event_loop().time()),
+            webhook_url=webhook_url
+        )
+        
+        # Store in memory and GCS for persistence
+        self.pending_image_requests[request_id] = context
+        await self._store_context_gcs(request_id, context, "image")
+        
+        logger.info(f"🎨 Registered image generation: {request_id} for user {user_id}")
+        logger.info(f"📡 Webhook URL: {webhook_url}")
+        
+        return webhook_url
+    
+    async def register_image_editing(
+        self,
+        request_id: str,
+        user_id: str,
+        session_id: str,
+        jid: str,
+        model_name: str,
+        prompt: str,
+        image_url: str,
+        status_url: str,
+        response_url: str
+    ) -> str:
+        """
+        Register a new image editing request for webhook tracking
+        
+        Returns:
+            str: Webhook URL for FAL.ai callback
+        """
+        # Create unique webhook URL for this request
+        webhook_url = f"{WEBHOOK_BASE_URL}/webhook/fal/{request_id}"
+        
+        # Create context
+        context = ImageEditingContext(
+            user_id=user_id,
+            session_id=session_id,
+            jid=jid,
+            model_name=model_name,
+            prompt=prompt,
+            image_url=image_url,
+            request_id=request_id,
+            status_url=status_url,
+            response_url=response_url,
+            created_at=str(asyncio.get_event_loop().time()),
+            webhook_url=webhook_url
+        )
+        
+        # Store in memory and GCS for persistence
+        self.pending_edit_requests[request_id] = context
+        await self._store_context_gcs(request_id, context, "edit")
+        
+        logger.info(f"✂️ Registered image editing: {request_id} for user {user_id}")
         logger.info(f"📡 Webhook URL: {webhook_url}")
         
         return webhook_url
@@ -176,7 +297,119 @@ class WebhookHandler:
         else:
             logger.warning(f"⚠️ Unknown status: {webhook_data.status}")
     
-    async def _handle_completion(self, context: VideoGenerationContext, webhook_data: WebhookRequest):
+    async def _handle_completion(self, context, webhook_data: WebhookRequest):
+        """Handle successful generation/editing completion for any operation type"""
+        try:
+            # Determine operation type
+            if isinstance(context, VideoGenerationContext):
+                operation_type = "video"
+                emoji = "🎬"
+                operation_name = "Video generation"
+            elif isinstance(context, ImageGenerationContext):
+                operation_type = "image"
+                emoji = "🎨"
+                operation_name = "Image generation"
+            elif isinstance(context, ImageEditingContext):
+                operation_type = "image"
+                emoji = "✂️"
+                operation_name = "Image editing"
+            else:
+                logger.error(f"❌ Unknown context type: {type(context)}")
+                return
+                
+            logger.info(f"✅ {operation_name} completed: {context.request_id}")
+            
+            # Try to get result URL from multiple sources
+            result_url = None
+            
+            # Debug: Log webhook data structure
+            logger.info(f"🔍 Webhook has data: {webhook_data.data is not None}")
+            if webhook_data.data:
+                logger.info(f"🔍 Data keys: {list(webhook_data.data.keys()) if isinstance(webhook_data.data, dict) else 'Not a dict'}")
+            
+            # First try from webhook data - check various possible structures
+            if webhook_data.data:
+                data = webhook_data.data
+                # Try various common URL field names based on operation type
+                if operation_type == "video":
+                    result_url = (
+                        data.get('url') or
+                        data.get('video_url') or 
+                        data.get('video', {}).get('url') if isinstance(data.get('video'), dict) else None or
+                        data.get('video') if isinstance(data.get('video'), str) else None or
+                        data.get('output', {}).get('url') if isinstance(data.get('output'), dict) else None or
+                        data.get('output', {}).get('video_url') if isinstance(data.get('output'), dict) else None or
+                        data.get('result', {}).get('url') if isinstance(data.get('result'), dict) else None or
+                        data.get('result', {}).get('video_url') if isinstance(data.get('result'), dict) else None
+                    )
+                else:  # image generation or editing
+                    result_url = (
+                        data.get('url') or
+                        data.get('image_url') or
+                        data.get('image', {}).get('url') if isinstance(data.get('image'), dict) else None or
+                        data.get('image') if isinstance(data.get('image'), str) else None or
+                        data.get('output', {}).get('url') if isinstance(data.get('output'), dict) else None or
+                        data.get('output', {}).get('image_url') if isinstance(data.get('output'), dict) else None or
+                        data.get('result', {}).get('url') if isinstance(data.get('result'), dict) else None or
+                        data.get('result', {}).get('image_url') if isinstance(data.get('result'), dict) else None or
+                        # For image arrays (common in image generation)
+                        data.get('images', [{}])[0].get('url') if isinstance(data.get('images'), list) and len(data.get('images', [])) > 0 else None
+                    )
+                if result_url:
+                    logger.info(f"{emoji} Got {operation_type} URL from webhook data: {result_url}")
+            
+            # If not in webhook data, fetch from stored URLs in context
+            if not result_url:
+                # Try response_url first (webhook or stored context)
+                response_url = None
+                if webhook_data.response_url:
+                    response_url = str(webhook_data.response_url)
+                    logger.info(f"🌐 Using response URL from webhook: {response_url}")
+                elif context.response_url:
+                    response_url = context.response_url
+                    logger.info(f"🌐 Using response URL from stored context: {response_url}")
+                
+                if response_url:
+                    logger.info(f"🔍 Fetching from response URL: {response_url}")
+                    final_result = await self._fetch_final_result(response_url)
+                    if final_result:
+                        logger.info(f"🔍 Final result keys: {list(final_result.keys()) if isinstance(final_result, dict) else 'Not a dict'}")
+                        
+                        # Extract URL from final result based on operation type
+                        if operation_type == "video":
+                            result_url = (
+                                final_result.get('url') or
+                                final_result.get('video_url') or
+                                final_result.get('video', {}).get('url') if isinstance(final_result.get('video'), dict) else None or
+                                final_result.get('video') if isinstance(final_result.get('video'), str) else None
+                            )
+                        else:  # image
+                            result_url = (
+                                final_result.get('url') or
+                                final_result.get('image_url') or
+                                final_result.get('image', {}).get('url') if isinstance(final_result.get('image'), dict) else None or
+                                final_result.get('image') if isinstance(final_result.get('image'), str) else None or
+                                final_result.get('images', [{}])[0].get('url') if isinstance(final_result.get('images'), list) and len(final_result.get('images', [])) > 0 else None
+                            )
+                        
+                        if result_url:
+                            logger.info(f"{emoji} Got {operation_type} URL from final result: {result_url}")
+            
+            # Send completion message
+            if result_url:
+                await self._send_completion_message(context, result_url, operation_type)
+            else:
+                logger.error(f"❌ Could not extract {operation_type} URL from any source")
+                await self._send_error_message(context, f"Generated {operation_type} successfully but could not retrieve download URL")
+            
+            # Clean up
+            await self._cleanup_context(context.request_id)
+            
+        except Exception as e:
+            logger.error(f"❌ Error handling {operation_name} completion: {e}")
+            await self._send_error_message(context, f"Error processing completed {operation_type}: {str(e)}")
+    
+    async def _send_completion_message(self, context, result_url: str, operation_type: str):
         """Handle successful video generation completion"""
         try:
             logger.info(f"✅ Video generation completed: {context.request_id}")
@@ -391,7 +624,68 @@ class WebhookHandler:
         except Exception as e:
             logger.error(f"❌ Error sending WhatsApp message: {e}")
     
-    async def _send_error_message(self, context: VideoGenerationContext, error: str):
+    async def _send_completion_message(self, context, result_url: str, operation_type: str):
+        """Send completion message to user for any operation type"""
+        # Determine emoji and message based on operation type
+        if operation_type == "video":
+            emoji = "🎬"
+            message_type = "video"
+            if isinstance(context, VideoGenerationContext):
+                message = (
+                    f"{emoji} Your video is ready!\n\n"
+                    f"**Model:** {context.model_name}\n"
+                    f"**Prompt:** {context.prompt}\n\n"
+                    f"🔗 **Download your video:**\n{result_url}\n\n"
+                    f"✨ Video generated successfully!"
+                )
+            else:
+                message = f"{emoji} Your video is ready!\n\n🔗 **Download:** {result_url}"
+        else:  # image generation or editing
+            if isinstance(context, ImageEditingContext):
+                emoji = "✂️"
+                message_type = "image edit"
+                message = (
+                    f"{emoji} Your image edit is ready!\n\n"
+                    f"**Model:** {context.model_name}\n"
+                    f"**Edit prompt:** {context.prompt}\n"
+                    f"**Original:** {context.image_url}\n\n"
+                    f"🔗 **Download your edited image:**\n{result_url}\n\n"
+                    f"✨ Image editing completed successfully!"
+                )
+            else:  # ImageGenerationContext
+                emoji = "🎨"
+                message_type = "image"
+                message = (
+                    f"{emoji} Your image is ready!\n\n"
+                    f"**Model:** {context.model_name}\n"
+                    f"**Prompt:** {context.prompt}\n\n"
+                    f"🔗 **Download your image:**\n{result_url}\n\n"
+                    f"✨ Image generated successfully!"
+                )
+        
+        await self._send_whatsapp_message(context.jid, message)
+        logger.info(f"✅ Sent {message_type} completion message to {context.jid}")
+
+    async def _send_error_message(self, context, error: str):
+        """Send error message to user for any operation type"""
+        # Determine operation type for appropriate error message
+        if isinstance(context, VideoGenerationContext):
+            operation = "video generation"
+        elif isinstance(context, ImageGenerationContext):
+            operation = "image generation"
+        elif isinstance(context, ImageEditingContext):
+            operation = "image editing"
+        else:
+            operation = "generation"
+            
+        error_message = (
+            f"❌ Sorry, there was an issue with your {operation}:\n\n"
+            f"**Error:** {error}\n\n"
+            f"Please try again or contact support if the issue persists."
+        )
+        await self._send_whatsapp_message(context.jid, error_message)
+
+    async def _send_error_message_legacy(self, context: VideoGenerationContext, error: str):
         """Send error message to user"""
         error_message = (
             f"❌ Sorry, there was an issue with your video generation:\n\n"
@@ -400,34 +694,53 @@ class WebhookHandler:
         )
         await self._send_whatsapp_message(context.jid, error_message)
     
-    async def _get_context(self, request_id: str) -> Optional[VideoGenerationContext]:
-        """Get context from memory or GCS"""
-        # Try memory first
-        if request_id in self.pending_requests:
-            return self.pending_requests[request_id]
+    async def _get_context(self, request_id: str):
+        """Get context from memory or GCS - supports all operation types"""
+        # Try memory first for all operation types
+        if request_id in self.pending_video_requests:
+            return self.pending_video_requests[request_id]
+        if request_id in self.pending_image_requests:
+            return self.pending_image_requests[request_id]
+        if request_id in self.pending_edit_requests:
+            return self.pending_edit_requests[request_id]
         
-        # Try GCS
-        try:
-            context_path = f"{self.webhook_folder}/{request_id}.json"
-            blob = bucket.blob(context_path)
-            
-            if blob.exists():
-                data = blob.download_as_text()
-                context_data = json.loads(data)
-                context = VideoGenerationContext(**context_data)
+        # Try GCS for all operation types
+        for folder, context_class, storage in [
+            (self.webhook_folder_video, VideoGenerationContext, self.pending_video_requests),
+            (self.webhook_folder_image, ImageGenerationContext, self.pending_image_requests),
+            (self.webhook_folder_edit, ImageEditingContext, self.pending_edit_requests)
+        ]:
+            try:
+                context_path = f"{folder}/{request_id}.json"
+                blob = bucket.blob(context_path)
                 
-                # Store back in memory
-                self.pending_requests[request_id] = context
-                return context
-        except Exception as e:
-            logger.error(f"❌ Error loading context from GCS: {e}")
+                if blob.exists():
+                    data = blob.download_as_text()
+                    context_data = json.loads(data)
+                    context = context_class(**context_data)
+                    
+                    # Store back in memory
+                    storage[request_id] = context
+                    return context
+            except Exception as e:
+                logger.error(f"❌ Error loading context from GCS {folder}: {e}")
         
         return None
     
-    async def _store_context_gcs(self, request_id: str, context: VideoGenerationContext):
+    async def _store_context_gcs(self, request_id: str, context, operation_type: str):
         """Store context in GCS for persistence"""
         try:
-            context_path = f"{self.webhook_folder}/{request_id}.json"
+            # Determine folder based on operation type
+            if operation_type == "video":
+                folder = self.webhook_folder_video
+            elif operation_type == "image":
+                folder = self.webhook_folder_image
+            elif operation_type == "edit":
+                folder = self.webhook_folder_edit
+            else:
+                raise ValueError(f"Unknown operation type: {operation_type}")
+                
+            context_path = f"{folder}/{request_id}.json"
             blob = bucket.blob(context_path)
             
             # Convert context to dict and store
@@ -437,25 +750,30 @@ class WebhookHandler:
                 content_type='application/json'
             )
             
-            logger.debug(f"💾 Stored context in GCS: {context_path}")
+            logger.debug(f"💾 Stored {operation_type} context in GCS: {context_path}")
         except Exception as e:
-            logger.error(f"❌ Error storing context in GCS: {e}")
+            logger.error(f"❌ Error storing {operation_type} context in GCS: {e}")
     
     async def _cleanup_context(self, request_id: str):
         """Clean up context from memory and GCS"""
-        # Remove from memory
-        if request_id in self.pending_requests:
-            del self.pending_requests[request_id]
+        # Remove from memory (check all storage types)
+        if request_id in self.pending_video_requests:
+            del self.pending_video_requests[request_id]
+        if request_id in self.pending_image_requests:
+            del self.pending_image_requests[request_id]
+        if request_id in self.pending_edit_requests:
+            del self.pending_edit_requests[request_id]
         
-        # Remove from GCS
-        try:
-            context_path = f"{self.webhook_folder}/{request_id}.json"
-            blob = bucket.blob(context_path)
-            if blob.exists():
-                blob.delete()
-                logger.debug(f"🗑️ Cleaned up context: {request_id}")
-        except Exception as e:
-            logger.error(f"❌ Error cleaning up context: {e}")
+        # Remove from GCS (check all folders)
+        for folder in [self.webhook_folder_video, self.webhook_folder_image, self.webhook_folder_edit]:
+            try:
+                context_path = f"{folder}/{request_id}.json"
+                blob = bucket.blob(context_path)
+                if blob.exists():
+                    blob.delete()
+                    logger.debug(f"🗑️ Cleaned up context: {context_path}")
+            except Exception as e:
+                logger.error(f"❌ Error cleaning up context {folder}: {e}")
 
 
 # Global webhook handler instance
