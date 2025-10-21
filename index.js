@@ -1874,19 +1874,37 @@ class WhatsAppBot {
                         await this.sendMessage(messageData.jid, messageData.message);
                         
                         // Delete processed message
-                        await file.delete();
-                        logger.info(`✅ Processed and deleted webhook message: ${file.name}`);
+                        try {
+                            await file.delete();
+                            logger.info(`✅ Processed and deleted webhook message: ${file.name}`);
+                        } catch (deleteError) {
+                            logger.error(`❌ Failed to delete webhook message ${file.name}:`, deleteError);
+                            // Still continue to prevent infinite loops
+                        }
                         
                         // Add small delay between messages
                         await new Promise(resolve => setTimeout(resolve, 1000));
                     } else {
                         logger.warn(`❌ Invalid message format: ${file.name}`);
                         // Delete invalid message
-                        await file.delete();
+                        try {
+                            await file.delete();
+                            logger.info(`✅ Deleted invalid message: ${file.name}`);
+                        } catch (deleteError) {
+                            logger.error(`❌ Failed to delete invalid message ${file.name}:`, deleteError);
+                        }
                     }
                 } catch (messageError) {
                     logger.error(`❌ Error processing message ${file.name}:`, messageError);
-                    // Don't delete on processing error - might be temporary
+                    // Add retry logic or forced cleanup for persistent errors
+                    if (messageError.message.includes('parse') || messageError.message.includes('format')) {
+                        logger.warn(`🗑️ Deleting corrupted message file: ${file.name}`);
+                        try {
+                            await file.delete();
+                        } catch (deleteError) {
+                            logger.error(`❌ Failed to delete corrupted message ${file.name}:`, deleteError);
+                        }
+                    }
                 }
             }
         } catch (error) {
