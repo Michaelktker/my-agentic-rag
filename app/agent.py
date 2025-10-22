@@ -152,20 +152,58 @@ async def list_user_artifacts(tool_context: ToolContext) -> str:
         storage_client = storage.Client()
         bucket = storage_client.bucket(artifacts_bucket_name)
         
-        # Get user ID from tool context if available
-        user_id = getattr(tool_context, 'user_id', None)
+        # Get user ID from tool context using comprehensive extraction logic
+        user_id = None
+        
+        try:
+            # Method 1: Check if tool_context has direct access to session/request context
+            if hasattr(tool_context, 'session'):
+                session = tool_context.session
+                if hasattr(session, 'user_id'):
+                    user_id = session.user_id
+                elif hasattr(session, 'userId'):
+                    user_id = session.userId  
+                elif hasattr(session, 'request_context') and hasattr(session.request_context, 'userId'):
+                    user_id = session.request_context.userId
+                    
+            # Method 2: Check if tool_context has agent attribute with session info
+            if not user_id and hasattr(tool_context, 'agent'):
+                agent = tool_context.agent
+                if hasattr(agent, 'session'):
+                    session = agent.session
+                    if hasattr(session, 'user_id'):
+                        user_id = session.user_id
+                    elif hasattr(session, 'userId'):
+                        user_id = session.userId
+                        
+            # Method 3: Check if tool_context has request or context attributes
+            if not user_id:
+                for context_attr in ['request', 'context', '_context', 'runtime_context']:
+                    if hasattr(tool_context, context_attr):
+                        context_obj = getattr(tool_context, context_attr)
+                        if context_obj and hasattr(context_obj, 'userId'):
+                            user_id = context_obj.userId
+                            break
+                
+            # Method 4: Try direct attributes on tool_context
+            if not user_id:
+                for attr in ['user_id', 'userId', 'user', 'session_user_id', '_user_id']:
+                    if hasattr(tool_context, attr):
+                        value = getattr(tool_context, attr)
+                        if value and value != "default_user":
+                            user_id = value
+                            logger.info(f"Found user_id in tool_context.{attr}: {value}")
+                            break
+                            
+            # Debug: print all tool_context attributes to understand the structure  
+            logger.info(f"Tool context type: {type(tool_context)}")
+            logger.info(f"Tool context attributes: {[attr for attr in dir(tool_context) if not attr.startswith('_')]}")
+            
+        except Exception as e:
+            logger.warning(f"Could not extract user_id from tool_context: {e}")
         
         # Debug logging
         print(f"DEBUG list_artifacts: Tool context user_id: {user_id}")
-        
-        if not user_id:
-            # Try alternative attributes
-            for attr in ['userId', 'user', '_user_id', 'current_user']:
-                if hasattr(tool_context, attr):
-                    alt_user = getattr(tool_context, attr)
-                    if alt_user:
-                        user_id = alt_user
-                        break
         
         if not user_id:
             # Search across all users if we can't determine the specific user
@@ -221,20 +259,67 @@ async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_con
         Analysis results and rename confirmation for images, or analysis context for other files
     """
     try:
-        # Get user information - use fallback approach since metadata may not be available
-        user_id = "default_user"  # This should be set by the system context
+        # Get user information from ADK session context
+        user_id = "default_user"  # Fallback value
+        extracted_user_id = False
         
-        # Try to get user ID from various possible sources
+        # Try to get user ID from various possible sources in the tool context
         try:
-            if hasattr(tool_context, 'user_id'):
-                user_id = tool_context.user_id
-            elif hasattr(tool_context, 'session') and hasattr(tool_context.session, 'user_id'):
-                user_id = tool_context.session.user_id
+            # Method 1: Check if tool_context has direct access to session/request context
+            if hasattr(tool_context, 'session'):
+                session = tool_context.session
+                if hasattr(session, 'user_id'):
+                    user_id = session.user_id
+                    extracted_user_id = True
+                elif hasattr(session, 'userId'):
+                    user_id = session.userId  
+                    extracted_user_id = True
+                elif hasattr(session, 'request_context') and hasattr(session.request_context, 'userId'):
+                    user_id = session.request_context.userId
+                    extracted_user_id = True
+                    
+            # Method 2: Check if tool_context has agent attribute with session info
+            if not extracted_user_id and hasattr(tool_context, 'agent'):
+                agent = tool_context.agent
+                if hasattr(agent, 'session'):
+                    session = agent.session
+                    if hasattr(session, 'user_id'):
+                        user_id = session.user_id
+                        extracted_user_id = True
+                    elif hasattr(session, 'userId'):
+                        user_id = session.userId
+                        extracted_user_id = True
+                        
+            # Method 3: Check if tool_context has request or context attributes
+            if not extracted_user_id:
+                for context_attr in ['request', 'context', '_context', 'runtime_context']:
+                    if hasattr(tool_context, context_attr):
+                        context_obj = getattr(tool_context, context_attr)
+                        if context_obj and hasattr(context_obj, 'userId'):
+                            user_id = context_obj.userId
+                            extracted_user_id = True
+                            break
+                
+            # Method 4: Try direct attributes on tool_context
+            if not extracted_user_id:
+                for attr in ['user_id', 'userId', 'user', 'session_user_id', '_user_id']:
+                    if hasattr(tool_context, attr):
+                        value = getattr(tool_context, attr)
+                        if value and value != "default_user":
+                            user_id = value
+                            extracted_user_id = True
+                            logger.info(f"Found user_id in tool_context.{attr}: {value}")
+                            break
+                            
+            # Debug: print all tool_context attributes to understand the structure  
+            logger.info(f"Tool context type: {type(tool_context)}")
+            logger.info(f"Tool context attributes: {[attr for attr in dir(tool_context) if not attr.startswith('_')]}")
+            
         except Exception as e:
             logger.warning(f"Could not extract user_id from tool_context: {e}")
             # Use default and continue
         
-        logger.info(f"Loading artifact {filename} for user {user_id}")
+        logger.info(f"Loading artifact {filename} for user {user_id} (extracted: {extracted_user_id})")
         
         # First try to load from current session using ADK
         artifact_data = None
@@ -251,10 +336,17 @@ async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_con
         
         # Fallback: Search across all sessions in GCS
         if not artifact_data:
-            artifact_data = await _search_artifact_across_sessions(filename, user_id)
+            # If we couldn't extract the real user ID, search across all users
+            if not extracted_user_id:
+                artifact_data = await _search_artifact_across_all_users(filename)
+            else:
+                artifact_data = await _search_artifact_across_sessions(filename, user_id)
         
         if not artifact_data:
-            return f"Artifact '{filename}' not found in any session for user {user_id}"
+            if not extracted_user_id:
+                return f"Artifact '{filename}' not found across any users"
+            else:
+                return f"Artifact '{filename}' not found in any session for user {user_id}"
         
         mime_type = artifact_data.get('mimeType', 'unknown')
         data_size = len(base64.b64decode(artifact_data['data'])) if artifact_data.get('data') else 0
@@ -327,6 +419,47 @@ async def _search_artifact_across_sessions(filename: str, user_id: str) -> dict:
         return None
     except Exception as e:
         logger.error(f"Error searching artifact across sessions: {e}")
+        return None
+
+
+async def _search_artifact_across_all_users(filename: str) -> dict:
+    """Search for artifact across all users and sessions in GCS."""
+    try:
+        from google.cloud import storage
+        import json
+        import base64
+        
+        # Get bucket from environment or default
+        artifacts_bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(artifacts_bucket_name)
+        
+        prefix = "app/"
+        logger.info(f"Searching for artifact '{filename}' across all users with prefix: {prefix}")
+        
+        for blob in bucket.list_blobs(prefix=prefix):
+            path_parts = blob.name.split('/')
+            # Expected structure: app/user_id/session_id/filename/version
+            if len(path_parts) >= 4 and path_parts[3] == filename:
+                data = blob.download_as_bytes()
+                
+                try:
+                    # Try JSON format first (from WhatsApp bot)
+                    artifact_data = json.loads(data.decode('utf-8'))
+                    if 'data' in artifact_data and 'mimeType' in artifact_data:
+                        logger.info(f"✅ Found artifact across all users in storage: {blob.name}")
+                        return artifact_data
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    # Raw binary format fallback
+                    logger.info(f"✅ Found raw artifact across all users in storage: {blob.name}")
+                    return {
+                        'data': base64.b64encode(data).decode('utf-8'),
+                        'mimeType': 'application/octet-stream'
+                    }
+        
+        return None
+    except Exception as e:
+        logger.error(f"Error searching artifact across all users: {e}")
         return None
 
 
