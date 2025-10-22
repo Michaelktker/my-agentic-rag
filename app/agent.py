@@ -221,19 +221,18 @@ async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_con
         Analysis results and rename confirmation for images, or analysis context for other files
     """
     try:
-        # Get user information from tool context metadata
-        user_id = tool_context.metadata.get("user_id")
-        if not user_id:
-            # Try alternative ways to get user information
-            for attr in ['userId', 'user', '_user_id', 'current_user']:
-                if hasattr(tool_context, attr):
-                    alt_user = getattr(tool_context, attr)
-                    if alt_user:
-                        user_id = alt_user
-                        break
+        # Get user information - use fallback approach since metadata may not be available
+        user_id = "default_user"  # This should be set by the system context
         
-        if not user_id:
-            return "Error: User ID not found in context"
+        # Try to get user ID from various possible sources
+        try:
+            if hasattr(tool_context, 'user_id'):
+                user_id = tool_context.user_id
+            elif hasattr(tool_context, 'session') and hasattr(tool_context.session, 'user_id'):
+                user_id = tool_context.session.user_id
+        except Exception as e:
+            logger.warning(f"Could not extract user_id from tool_context: {e}")
+            # Use default and continue
         
         logger.info(f"Loading artifact {filename} for user {user_id}")
         
@@ -447,7 +446,16 @@ async def _store_renamed_artifact(
         storage_client = storage.Client()
         artifacts_bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
         bucket = storage_client.bucket(artifacts_bucket_name)
-        session_id = tool_context.metadata.get("session_id", "default_session")
+        
+        # Get session ID with fallback
+        session_id = "default_session"
+        try:
+            if hasattr(tool_context, 'session_id'):
+                session_id = tool_context.session_id
+            elif hasattr(tool_context, 'session') and hasattr(tool_context.session, 'id'):
+                session_id = tool_context.session.id
+        except Exception as e:
+            logger.warning(f"Could not extract session_id from tool_context: {e}")
         
         new_blob_path = f"app/{user_id}/{session_id}/{new_filename}/v1"
         new_blob = bucket.blob(new_blob_path)
