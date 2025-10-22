@@ -499,18 +499,21 @@ Respond with ONLY the filename summary text, no quotes or extra formatting."""
         # Use Vertex AI model directly for filename generation (ADK doesn't support send_message)
         try:
             import vertexai
-            from vertexai.generative_models import GenerativeModel
+            from vertexai.generative_models import GenerativeModel, Part
             
             # Initialize the model
             model = GenerativeModel("gemini-2.5-flash")
             
+            # Create the image part correctly
+            image_part = Part.from_data(
+                data=base64.b64decode(artifact_data['data']),
+                mime_type=mime_type
+            )
+            
             # Generate filename summary
             summary_response = model.generate_content([
                 summary_prompt,
-                {
-                    "mime_type": mime_type,
-                    "data": base64.b64decode(artifact_data['data'])
-                }
+                image_part
             ])
             
             raw_summary = summary_response.text.strip().strip('"\'')
@@ -541,14 +544,17 @@ Please analyze what you see and provide detailed insights.""")]
         
         # Use Vertex AI model directly for detailed analysis (ADK doesn't support send_message)
         try:
+            # Create the image part for analysis
+            analysis_image_part = Part.from_data(
+                data=base64.b64decode(artifact_data['data']),
+                mime_type=mime_type
+            )
+            
             analysis_response = model.generate_content([
                 f"""Now provide a comprehensive analysis of this image based on: "{analysis_query}"
 
 Please analyze what you see and provide detailed insights.""",
-                {
-                    "mime_type": mime_type,
-                    "data": base64.b64decode(artifact_data['data'])
-                }
+                analysis_image_part
             ])
             
             analysis_text = analysis_response.text.strip()
