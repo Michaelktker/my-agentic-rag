@@ -31,11 +31,13 @@ const PROJECT_ID = process.env.PROJECT_ID || config.gcs.projectId;
 // ADK Endpoint Configuration with fallback
 const PRODUCTION_ADK_URL = process.env.PRODUCTION_ADK_URL || 'https://my-agentic-rag-638797485217.us-central1.run.app';
 const STAGING_ADK_URL = process.env.STAGING_ADK_URL || 'https://my-agentic-rag-454188184539.us-central1.run.app';
+const LOCALHOST_ADK_URL = process.env.LOCALHOST_ADK_URL || 'http://localhost:8080';
 const HEALTH_CHECK_TIMEOUT = parseInt(process.env.HEALTH_CHECK_TIMEOUT || '5000'); // 5 seconds in milliseconds
 
 console.log('🔧 WhatsApp Bot Configuration:');
 console.log(`📍 Production ADK URL: ${PRODUCTION_ADK_URL}`);
 console.log(`📍 Staging ADK URL: ${STAGING_ADK_URL}`);
+console.log(`📍 Localhost ADK URL: ${LOCALHOST_ADK_URL}`);
 console.log(`🏥 Health check timeout: ${HEALTH_CHECK_TIMEOUT}ms`);
 console.log(`📱 App Name: ${ADK_APP_NAME}`);
 
@@ -105,8 +107,15 @@ async function getActiveAdkEndpoint() {
         return STAGING_ADK_URL;
     }
     
-    // Both down - use production and let error bubble up
-    logger.error(`❌ Both endpoints unavailable, defaulting to production`);
+    // Final fallback to localhost for local development
+    logger.warn('⚠️ Both cloud endpoints unavailable, trying localhost...');
+    if (await checkEndpointHealth(LOCALHOST_ADK_URL)) {
+        logger.info(`✅ Using localhost endpoint: ${LOCALHOST_ADK_URL}`);
+        return LOCALHOST_ADK_URL;
+    }
+    
+    // All endpoints down - use production and let error bubble up
+    logger.error(`❌ All endpoints unavailable (production, staging, localhost), defaulting to production`);
     return PRODUCTION_ADK_URL;
 }
 
@@ -244,20 +253,23 @@ class GcsArtifactService {
     }
 
     /**
-     * Generate artifact path: {appName}/{userId}/{sessionId}/{filename}
-     * This matches ADK Runner's expected path structure for cross-compatibility
+     * Generate artifact path: {appName}/{userId}/shared/{filename}
+     * Changed from session-based to user-based storage for persistent access
+     * All artifacts for a user are stored in a 'shared' folder under their user ID
      */
     getArtifactPath(appName, userId, filename, sessionId = 'shared') {
-        // Use ADK-compatible path: app/userId/sessionId/filename
-        return `${appName}/${userId}/${sessionId}/${filename}`;
+        // Use user-based path: app/userId/shared/filename (ignore sessionId for persistence)
+        return `${appName}/${userId}/shared/${filename}`;
     }
 
     /**
      * Save artifact to GCS and return version number
+     * Now uses user-based storage (all artifacts stored under userId/shared/)
      */
     async saveArtifact(appName, userId, filename, part, sessionId = 'shared') {
         try {
-            const artifactPath = this.getArtifactPath(appName, userId, filename, sessionId);
+            // Use user-based path (sessionId is ignored for user-scoped storage)
+            const artifactPath = this.getArtifactPath(appName, userId, filename, 'shared');
             
             // Convert Part object to storage format
             const artifactData = {
@@ -298,10 +310,12 @@ class GcsArtifactService {
 
     /**
      * Load artifact from GCS (latest version if no version specified)
+     * Now uses user-based storage (loads from userId/shared/)
      */
     async loadArtifact(appName, userId, filename, version = null, sessionId = 'shared') {
         try {
-            const artifactPath = this.getArtifactPath(appName, userId, filename, sessionId);
+            // Use user-based path (sessionId is ignored for user-scoped storage)
+            const artifactPath = this.getArtifactPath(appName, userId, filename, 'shared');
             
             let targetVersion = version;
             if (!targetVersion) {
@@ -357,9 +371,9 @@ class GcsArtifactService {
     }
 
     /**
-     * Load artifact from GCS by session ID (ADK session-scoped artifacts)
+     * Load artifact from GCS for a user (now uses user-based storage)
      */
-    async loadArtifactBySession(appName, userId, sessionId, filename, version = 0) {
+    async loadArtifactByUser(appName, userId, filename, version = null) {
         try {
             // First test GCS connectivity
             logger.info('Testing GCS connection before artifact loading...');
@@ -369,78 +383,39 @@ class GcsArtifactService {
                 return null;
             }
             
-            // ADK stores artifacts in: app/userId/sessionId/filename/version
-            const artifactPath = `${appName}/${userId}/${sessionId}/${filename}/${version}`;
-            logger.info(`Loading artifact from path: ${artifactPath}`);
-            
-            const file = this.bucket.file(artifactPath);
-            
-            logger.info('Checking if artifact exists...');
-            const [exists] = await Promise.race([
-                file.exists(),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout checking file existence')), 10000))
-            ]);
-            logger.info(`Artifact exists check: ${exists} for path: ${artifactPath}`);
-            
-            if (!exists) {
-                logger.warn(`Artifact not found: ${artifactPath}`);
-                return null;
-            }
-
-            logger.info(`Downloading artifact: ${artifactPath}`);
-            // ADK stores raw image data, not JSON wrapped data
-            const [imageBuffer] = await Promise.race([
-                file.download(),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout downloading file')), 30000))
-            ]);
-            logger.info(`Downloaded ${imageBuffer.length} bytes for artifact: ${filename}`);
-            
-            // Convert to base64 for WhatsApp/Baileys
-            const base64Data = imageBuffer.toString('base64');
-            logger.info(`Converted to base64, length: ${base64Data.length}`);
-            
-            // Determine MIME type from filename
-            let mimeType = 'image/png';
-            if (filename.includes('.jpg') || filename.includes('.jpeg')) {
-                mimeType = 'image/jpeg';
-            } else if (filename.includes('.webp')) {
-                mimeType = 'image/webp';
-            }
-            
-            logger.info(`Artifact loaded successfully: ${filename}, mimeType: ${mimeType}`);
-            
-            // Return in format expected by WhatsApp bot
-            return {
-                mimeType: mimeType,
-                data: base64Data
-            };
+            // Load using user-based storage
+            return await this.loadArtifact(appName, userId, filename, version, 'shared');
             
         } catch (error) {
-            // Use console.error to avoid logger truncation
-            console.error('=== ARTIFACT LOADING ERROR DETAILS ===');
-            console.error(`Error loading session artifact ${filename}:`);
-            console.error(`Error message: ${error.message}`);
-            console.error(`Error name: ${error.name}`);
-            console.error(`Error code: ${error.code}`);
-            console.error(`Artifact path: ${artifactPath}`);
-            console.error('Full error object:', error);
-            console.error('Error stack trace:');
-            console.error(error.stack);
-            console.error('=== END ERROR DETAILS ===');
+            logger.error(`Error loading user artifact ${filename}:`, error);
+            return null;
+        }
+    }
+
+    /**
+     * Load artifact from GCS by session ID (DEPRECATED - kept for compatibility)
+     * @deprecated Use loadArtifactByUser instead for user-scoped storage
+     */
+    async loadArtifactBySession(appName, userId, sessionId, filename, version = 0) {
+        try {
+            logger.warn('loadArtifactBySession is deprecated, using user-based storage instead');
+            // Redirect to user-based loading
+            return await this.loadArtifactByUser(appName, userId, filename, version);
             
-            // Also log to the regular logger
-            logger.error(`Error loading session artifact ${filename}: ${error.message}`);
-            
+        } catch (error) {
+            logger.error(`Error in deprecated loadArtifactBySession for ${filename}:`, error);
             return null;
         }
     }
 
     /**
      * List all versions for an artifact
+     * Now uses user-based storage (lists from userId/shared/)
      */
     async listVersions(appName, userId, filename, sessionId = 'shared') {
         try {
-            const artifactPath = this.getArtifactPath(appName, userId, filename, sessionId);
+            // Use user-based path (sessionId is ignored for user-scoped storage)
+            const artifactPath = this.getArtifactPath(appName, userId, filename, 'shared');
             const [files] = await this.bucket.getFiles({
                 prefix: `${artifactPath}/v`
             });
@@ -462,17 +437,19 @@ class GcsArtifactService {
 
     /**
      * List all artifact filenames for a user
+     * Now uses user-based storage (lists from userId/shared/)
      */
     async listArtifactKeys(appName, userId) {
         try {
-            const userPath = `${this.artifactsFolder}/${appName}/${userId}/`;
+            // Use user-based path: app/userId/shared/
+            const userPath = `${appName}/${userId}/shared/`;
             const [files] = await this.bucket.getFiles({
                 prefix: userPath
             });
 
             const filenames = new Set();
             files.forEach(file => {
-                // Extract filename from path: artifacts/app/userId/filename/v1 -> filename
+                // Extract filename from path: app/userId/shared/filename/v1 -> filename
                 const relativePath = file.name.substring(userPath.length);
                 const pathParts = relativePath.split('/');
                 if (pathParts.length >= 2 && pathParts[1].startsWith('v')) {
@@ -489,10 +466,12 @@ class GcsArtifactService {
 
     /**
      * Delete all versions of an artifact
+     * Now uses user-based storage (deletes from userId/shared/)
      */
     async deleteArtifact(appName, userId, filename) {
         try {
-            const artifactPath = this.getArtifactPath(appName, userId, filename);
+            // Use user-based path (no sessionId needed)
+            const artifactPath = this.getArtifactPath(appName, userId, filename, 'shared');
             const [files] = await this.bucket.getFiles({
                 prefix: `${artifactPath}/`
             });

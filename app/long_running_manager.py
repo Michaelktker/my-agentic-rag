@@ -36,9 +36,9 @@ class LongRunningOperationManager:
         """
         try:
             # Import the status function from agent
-            from app.agent import get_video_operation_status
+            from app.agent import get_fal_operation_status
             
-            status = await get_video_operation_status(operation_id)
+            status = await get_fal_operation_status(operation_id)
             return status
             
         except Exception as e:
@@ -74,23 +74,53 @@ class LongRunningOperationManager:
             status = await self.poll_operation(operation_id)
             
             if status["status"] == "COMPLETED":
-                # Create success response
+                # Get operation type and create appropriate success message
+                operation_type = status.get("type", "generation")
+                model_name = status.get("model_name")
+                prompt = status.get("prompt", "")[:100]
+                if len(status.get("prompt", "")) > 100:
+                    prompt += "..."
+                
+                # Create type-specific success response
+                if operation_type == "video_generation":
+                    result_url = status.get("video_url")
+                    emoji = "🎬"
+                    content_type = "video"
+                elif operation_type == "image_generation":
+                    result_url = status.get("image_url")
+                    emoji = "🎨"
+                    content_type = "image"
+                elif operation_type == "image_editing":
+                    result_url = status.get("image_url")
+                    emoji = "✏️"
+                    content_type = "image"
+                else:
+                    result_url = status.get("result_url") or status.get("video_url") or status.get("image_url")
+                    emoji = "✨"
+                    content_type = "content"
+                
                 completion_data = {
                     "operation_id": operation_id,
                     "status": "COMPLETED",
-                    "video_url": status.get("video_url"),
-                    "model_name": status.get("model_name"),
+                    "result_url": result_url,
+                    "model_name": model_name,
                     "prompt": status.get("prompt"),
-                    "message": f"🎬 Your video is ready!\n\n**Model:** {status.get('model_name')}\n**Prompt:** {status.get('prompt', '')[:100]}{'...' if len(status.get('prompt', '')) > 100 else ''}\n\n🔗 **Download:** {status.get('video_url')}\n\n✨ Video generated successfully!"
+                    "type": operation_type,
+                    "message": f"{emoji} Your {content_type} is ready!\n\n**Model:** {model_name}\n**Prompt:** {prompt}\n\n🔗 **Download:** {result_url}\n\n✨ {content_type.title()} generated successfully!"
                 }
                 
             elif status["status"] == "FAILED":
+                # Get operation type for error message
+                operation_type = status.get("type", "generation")
+                content_type = "video" if "video" in operation_type else "image" if "image" in operation_type else "content"
+                
                 # Create error response
                 completion_data = {
                     "operation_id": operation_id,
                     "status": "FAILED",
                     "error": status.get("error", "Unknown error"),
-                    "message": f"❌ Video generation failed: {status.get('error', 'Unknown error')}"
+                    "type": operation_type,
+                    "message": f"❌ {content_type.title()} generation failed: {status.get('error', 'Unknown error')}"
                 }
                 
             else:

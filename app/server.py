@@ -25,7 +25,6 @@ from vertexai import agent_engines
 from app.utils.gcs import create_bucket_if_not_exists
 from app.utils.tracing import CloudTraceLoggingSpanExporter
 from app.utils.typing import Feedback
-from app.webhook_handler import add_webhook_routes
 
 # Deployment test - October 3, 2025 08:40 UTC
 _, project_id = google.auth.default()
@@ -76,9 +75,6 @@ app: FastAPI = get_fast_api_app(
 )
 app.title = "my-agentic-rag"
 app.description = "API for interacting with the Agent my-agentic-rag"
-
-# Add webhook routes for async task callbacks
-add_webhook_routes(app)
 
 
 @app.get("/health")
