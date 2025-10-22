@@ -853,6 +853,9 @@ async def generate_video_long_running(
         # Store in GCS for persistence across sessions
         await _store_operation_details(operation_id, operation_details)
         
+        # 🚀 AUTO-TRIGGER POLLING: Start background monitoring
+        await _trigger_background_polling(operation_details, tool_context)
+        
         # Return operation details - this pauses the agent run
         return operation_details
         
@@ -965,6 +968,9 @@ async def generate_image_long_running(
         
         await _store_operation_details(operation_id, operation_details)
         
+        # 🚀 AUTO-TRIGGER POLLING: Start background monitoring
+        await _trigger_background_polling(operation_details, tool_context)
+        
         logger.info(f"🎨 Started image generation: {operation_id} with model {model_name}")
         
         return operation_details
@@ -1072,6 +1078,9 @@ async def edit_image_long_running(
         
         await _store_operation_details(operation_id, operation_details)
         
+        # 🚀 AUTO-TRIGGER POLLING: Start background monitoring
+        await _trigger_background_polling(operation_details, tool_context)
+        
         logger.info(f"✏️ Started image editing: {operation_id} with model {model_name}")
         
         return operation_details
@@ -1109,6 +1118,246 @@ async def _store_operation_details(operation_id: str, details: dict):
         
     except Exception as e:
         logger.error(f"❌ Error storing operation details: {e}")
+
+
+async def _trigger_background_polling(operation_details: dict, tool_context: Optional[ToolContext] = None):
+    """
+    Auto-trigger background polling using our custom ADK runner.
+    
+    This function starts monitoring immediately after a long-running operation begins,
+    using our custom runner for complete agent resume functionality.
+    """
+    try:
+        operation_id = operation_details.get("operation_id")
+        session_id = getattr(tool_context, 'session_id', 'auto_session') if tool_context else 'auto_session'
+        user_id = operation_details.get("user_id", "auto_user")
+        function_call_id = getattr(tool_context, 'function_call_id', 'auto_call') if tool_context else 'auto_call'
+        function_name = operation_details.get("type", "generate_image_flux_pro")
+        
+        # Ensure user_id is never None for ADK Session compatibility
+        if user_id is None or user_id == "":
+            user_id = "auto_user"
+        
+        logger.info(f"🚀 Auto-triggering background polling for operation: {operation_id}")
+        logger.info(f"🔍 Session details: user_id={user_id}, session_id={session_id}")
+        
+        # Try to get our custom ADK runner from the FastAPI app
+        try:
+            from app.server import app, get_custom_runner_from_app
+            custom_runner = get_custom_runner_from_app(app)
+            
+            if custom_runner:
+                logger.info(f"✅ Found custom ADK runner - using enhanced polling with agent resume")
+                
+                # Ensure session exists
+                if session_id not in custom_runner.active_sessions:
+                    await custom_runner.create_session(user_id, session_id)
+                
+                # Start the polling task
+                asyncio.create_task(
+                    _poll_and_resume_with_custom_runner(
+                        operation_id=operation_id,
+                        custom_runner=custom_runner,
+                        session_id=session_id,
+                        user_id=user_id,
+                        function_call_id=function_call_id,
+                        function_name=function_name
+                    )
+                )
+                
+                logger.info(f"✅ Started enhanced polling with custom runner for {operation_id}")
+                return
+                
+            else:
+                logger.warning(f"⚠️ Custom ADK runner not available - falling back to simplified polling")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Could not access custom ADK runner: {e} - falling back to simplified polling")
+        
+        # Fallback to simplified background polling
+        asyncio.create_task(_simplified_background_polling(operation_details))
+        logger.info(f"✅ Started simplified background polling for {operation_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error auto-triggering polling: {e}")
+
+
+async def _poll_and_resume_with_custom_runner(
+    operation_id: str,
+    custom_runner,
+    session_id: str,
+    user_id: str,
+    function_call_id: str,
+    function_name: str,
+    max_attempts: int = 120  # 10 minutes with 5-second intervals
+):
+    """
+    Poll operation status and resume agent using our custom runner.
+    
+    This provides complete agent resume functionality with proper session management.
+    """
+    try:
+        logger.info(f"🔄 Starting enhanced polling for operation {operation_id}")
+        
+        for attempt in range(max_attempts):
+            try:
+                # Poll the operation status
+                status = await get_fal_operation_status(operation_id)
+                
+                if status["status"] in ["COMPLETED", "FAILED"]:
+                    logger.info(f"✅ Operation {operation_id} completed with status: {status['status']}")
+                    
+                    # Prepare the result data
+                    if status["status"] == "COMPLETED":
+                        result_data = {
+                            "status": "completed",
+                            "operation_id": operation_id
+                        }
+                        
+                        # Add the appropriate result URL based on function type
+                        if "video" in function_name.lower():
+                            result_data["video_url"] = status.get("video_url")
+                        elif "image" in function_name.lower():
+                            result_data["image_url"] = status.get("image_url")
+                        else:
+                            result_data["result_url"] = status.get("result_url")
+                    else:
+                        result_data = {
+                            "status": "failed",
+                            "operation_id": operation_id,
+                            "error": status.get("error", "Operation failed")
+                        }
+                    
+                    # Resume the agent using our custom runner
+                    response_stream = await custom_runner.complete_long_running_operation(
+                        session_id=session_id,
+                        operation_id=operation_id,
+                        result_data=result_data,
+                        function_call_id=function_call_id,
+                        function_name=function_name
+                    )
+                    
+                    if response_stream:
+                        logger.info(f"🎉 Agent resumed successfully for operation {operation_id}")
+                        
+                        # Process the response stream to log the agent's response
+                        try:
+                            async for event in response_stream:
+                                logger.debug(f"🔍 Processing event: {type(event)}")
+                                if hasattr(event, 'is_final_response') and event.is_final_response():
+                                    logger.debug(f"🔍 Final response event detected")
+                                    if hasattr(event, 'content') and event.content:
+                                        logger.debug(f"🔍 Event has content: {type(event.content)}")
+                                        if hasattr(event.content, 'parts') and event.content.parts:
+                                            logger.debug(f"🔍 Content has parts: {len(event.content.parts)} parts")
+                                            if len(event.content.parts) > 0:
+                                                try:
+                                                    response_text = event.content.parts[0].text
+                                                    logger.info(f"✅ Agent response: {response_text[:200]}...")
+                                                except (IndexError, AttributeError) as access_error:
+                                                    logger.warning(f"⚠️ Could not access response text: {access_error}")
+                                            else:
+                                                logger.warning(f"⚠️ Parts list is empty")
+                                        else:
+                                            logger.debug(f"🔍 No parts in content")
+                                    else:
+                                        logger.debug(f"🔍 No content in event")
+                        except Exception as stream_error:
+                            logger.warning(f"⚠️ Error processing response stream: {stream_error}")
+                            import traceback
+                            logger.warning(f"⚠️ Stack trace: {traceback.format_exc()}")
+                    else:
+                        logger.warning(f"⚠️ Could not resume agent for operation {operation_id}")
+                    
+                    break
+                    
+                elif status["status"] == "IN_PROGRESS":
+                    progress_info = ""
+                    if "queue_position" in status:
+                        progress_info = f" (queue position: {status['queue_position']})"
+                    elif "progress" in status:
+                        progress_info = f" (progress: {status['progress']}%)"
+                        
+                    logger.info(f"⏳ Operation {operation_id} in progress{progress_info} (attempt {attempt + 1}/{max_attempts})")
+                    await asyncio.sleep(5)  # Wait 5 seconds before next poll
+                    continue
+                    
+                else:
+                    logger.error(f"❌ Unknown status for operation {operation_id}: {status}")
+                    break
+                    
+            except Exception as poll_error:
+                logger.error(f"❌ Error polling operation {operation_id}: {poll_error}")
+                await asyncio.sleep(5)  # Wait before retrying
+                continue
+        
+        else:
+            logger.error(f"⏰ Timeout polling operation {operation_id} after {max_attempts} attempts")
+            
+    except Exception as e:
+        logger.error(f"❌ Error in enhanced polling for {operation_id}: {e}")
+
+
+async def _simplified_background_polling(operation_details: dict):
+    """
+    Simplified background polling that logs completion but doesn't resume agent.
+    
+    This is a fallback approach when we can't access the agent runner directly.
+    """
+    try:
+        operation_id = operation_details.get("operation_id")
+        operation_type = operation_details.get("type", "generation")
+        
+        logger.info(f"🔄 Starting simplified polling for {operation_id}")
+        
+        # Poll for up to 10 minutes (120 attempts × 5 seconds)
+        for attempt in range(120):
+            status = await get_fal_operation_status(operation_id)
+            
+            if status["status"] == "COMPLETED":
+                # Get the result URL
+                result_url = (status.get("video_url") or 
+                             status.get("image_url") or 
+                             status.get("result_url"))
+                
+                # Log successful completion
+                content_type = "video" if "video" in operation_type else "image"
+                logger.info(f"🎉 {content_type.title()} generation completed!")
+                logger.info(f"📁 Operation: {operation_id}")
+                logger.info(f"🔗 Result URL: {result_url}")
+                logger.info(f"📝 Prompt: {operation_details.get('prompt', 'N/A')}")
+                
+                # TODO: Here we would resume the agent if we had access to the runner
+                # For now, we just log the completion
+                logger.info(f"⚠️  Agent resume not implemented - operation completed in background")
+                
+                break
+                
+            elif status["status"] == "FAILED":
+                error_msg = status.get("error", "Unknown error")
+                logger.error(f"❌ Operation {operation_id} failed: {error_msg}")
+                break
+                
+            elif status["status"] == "IN_PROGRESS":
+                progress_info = ""
+                if "queue_position" in status:
+                    progress_info = f" (queue position: {status['queue_position']})"
+                elif "progress" in status:
+                    progress_info = f" (progress: {status['progress']}%)"
+                    
+                logger.info(f"⏳ Operation {operation_id} in progress{progress_info} (attempt {attempt + 1}/120)")
+                await asyncio.sleep(5)  # Wait 5 seconds
+                continue
+                
+            else:
+                logger.error(f"❌ Unknown status for operation {operation_id}: {status}")
+                break
+                
+        else:
+            logger.error(f"⏰ Timeout: Operation {operation_id} did not complete within 10 minutes")
+            
+    except Exception as e:
+        logger.error(f"❌ Error in simplified background polling: {e}")
 
 
 async def get_fal_operation_status(operation_id: str) -> dict:
@@ -1159,15 +1408,20 @@ async def get_fal_operation_status(operation_id: str) -> dict:
             }
         
         # Check FAL.ai status
+        fal_key = os.getenv("FAL_KEY")
+        headers = {}
+        if fal_key:
+            headers["Authorization"] = f"Key {fal_key}"
+        
         async with aiohttp.ClientSession() as session:
-            async with session.get(status_url) as response:
+            async with session.get(status_url, headers=headers) as response:
                 if response.status == 200:
                     fal_status = await response.json()
                     
                     if fal_status.get("status") == "COMPLETED":
                         # Get final result
                         if response_url:
-                            async with session.get(response_url) as result_response:
+                            async with session.get(response_url, headers=headers) as result_response:
                                 if result_response.status == 200:
                                     final_result = await result_response.json()
                                     
@@ -1204,7 +1458,14 @@ async def get_fal_operation_status(operation_id: str) -> dict:
                                     )
                                     
                                     return details
-                                
+                                else:
+                                    logger.error(f"Failed to get result from fal.ai: {result_response.status}")
+                                    return {
+                                        **details,
+                                        "status": "ERROR",
+                                        "error": f"Failed to get result from fal.ai: HTTP {result_response.status}"
+                                    }
+                        
                     elif fal_status.get("status") == "FAILED":
                         # Mark as failed
                         error_message = fal_status.get("error", f"{operation_type.replace('_', ' ').title()} failed")
@@ -1231,12 +1492,28 @@ async def get_fal_operation_status(operation_id: str) -> dict:
                         })
                         
                         return details
-                
-        return {
-            **details,
-            "status": "ERROR",
-            "error": "Could not check FAL.ai status"
-        }
+                elif response.status == 202:
+                    # HTTP 202 means the operation is still in progress
+                    fal_status = await response.json()
+                    logger.debug(f"Operation {operation_id} still in progress (HTTP 202)")
+                    
+                    # Update stored details with progress info
+                    details.update({
+                        "status": "IN_PROGRESS",
+                        "queue_position": fal_status.get("queue_position"),
+                        "progress": fal_status.get("progress"),
+                        "fal_status": fal_status.get("status", "IN_PROGRESS")
+                    })
+                    
+                    return details
+                else:
+                    logger.error(f"Failed to check fal.ai status: HTTP {response.status}")
+                    error_text = await response.text()
+                    return {
+                        **details,
+                        "status": "ERROR",
+                        "error": f"Failed to check fal.ai status: HTTP {response.status} - {error_text[:200]}"
+                    }
         
     except Exception as e:
         logger.error(f"❌ Error checking operation status: {e}")
