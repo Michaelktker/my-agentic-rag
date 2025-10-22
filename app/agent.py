@@ -496,11 +496,30 @@ Respond with ONLY the filename summary text, no quotes or extra formatting."""
             parts=[types.Part(text=summary_prompt)]
         )
         
-        # The image should be automatically included from the stored artifact
-        summary_response = await tool_context.send_message(summary_content)
+        # Use Vertex AI model directly for filename generation (ADK doesn't support send_message)
+        try:
+            import vertexai
+            from vertexai.generative_models import GenerativeModel
+            
+            # Initialize the model
+            model = GenerativeModel("gemini-2.5-flash")
+            
+            # Generate filename summary
+            summary_response = model.generate_content([
+                summary_prompt,
+                {
+                    "mime_type": mime_type,
+                    "data": base64.b64decode(artifact_data['data'])
+                }
+            ])
+            
+            raw_summary = summary_response.text.strip().strip('"\'')
+        except Exception as e:
+            logger.warning(f"Failed to generate AI summary: {e}")
+            # Fallback to a generic descriptive name
+            raw_summary = "uploaded_image_content"
         
         # Extract and clean the summary
-        raw_summary = str(summary_response).strip().strip('"\'')
         cleaned_summary = _clean_filename_text(raw_summary, 45)
         
         # Generate new filename
@@ -520,7 +539,22 @@ Respond with ONLY the filename summary text, no quotes or extra formatting."""
 Please analyze what you see and provide detailed insights.""")]
         )
         
-        analysis_response = await tool_context.send_message(analysis_content)
+        # Use Vertex AI model directly for detailed analysis (ADK doesn't support send_message)
+        try:
+            analysis_response = model.generate_content([
+                f"""Now provide a comprehensive analysis of this image based on: "{analysis_query}"
+
+Please analyze what you see and provide detailed insights.""",
+                {
+                    "mime_type": mime_type,
+                    "data": base64.b64decode(artifact_data['data'])
+                }
+            ])
+            
+            analysis_text = analysis_response.text.strip()
+        except Exception as e:
+            logger.warning(f"Failed to generate AI analysis: {e}")
+            analysis_text = "Analysis could not be generated due to a technical issue."
         
         return f"""✅ **Image Analysis & Auto-Rename Complete!**
 
@@ -531,7 +565,7 @@ Please analyze what you see and provide detailed insights.""")]
 📊 **File Details**: {mime_type} • {size_str}
 
 🔍 **Analysis Results**:
-{analysis_response}
+{analysis_text}
 
 Your image has been automatically renamed with a descriptive filename and is now available as `{new_filename}` for future reference!"""
         
