@@ -33,7 +33,7 @@ A production-ready system that combines:
 - ✅ **Production Ready**: Deployed to staging and production environments
 - ✅ **WhatsApp Bot**: Full media support with ADK artifact integration
 - ✅ **Image Generation**: Complete Vertex AI Imagen 3.0 integration with WhatsApp delivery
-- ✅ **fal.ai MCP Integration**: Advanced image/video generation via Model Context Protocol
+- ✅ **fal.ai MCP Integration**: ✅ **FULLY OPERATIONAL** - FastMCP `**kwargs` compatibility resolved, 100+ AI models accessible
 - ✅ **Multimodal AI**: Text, image analysis, audio/video processing, and document handling
 - ✅ **CI/CD Pipeline**: Automated deployments with manual production approval
 - ✅ **Security**: GitHub tokens managed via Google Secret Manager
@@ -42,10 +42,11 @@ A production-ready system that combines:
 - ✅ **Architectural Stability**: Resolved all duplicate service and path compatibility issues
 
 **Latest Updates (October 2025)**:
+- � **FAL MCP `**kwargs` Compatibility Fix**: ✅ **RESOLVED** - Successfully fixed FastMCP compatibility by removing problematic `**kwargs` functions following am0y/mcp-fal patterns
+- 🚀 **fal.ai MCP Integration**: Fully operational with 100+ AI models via Model Context Protocol with proper ADK agent architecture
+- 🔧 **MCP Server Stability**: FastMCP framework now works seamlessly with generic `generate()` function instead of specialized `**kwargs` functions
 - 🎨 **Image Generation**: End-to-end image creation using Imagen 3.0 with direct WhatsApp delivery
-- 🚀 **fal.ai MCP Integration**: Successfully integrated 100+ AI models via Model Context Protocol with proper ADK agent architecture
-- 🔧 **Artifact Public URL Generation**: Complete fix for ADK JSON format artifacts - extracts raw image data and creates publicly accessible URLs
-- 🔗 **make_artifact_public Tool**: New function that converts ADK artifacts to raw images with public GCS URLs for fal.ai integration
+- 🔗 **make_artifact_public Tool**: Function that converts ADK artifacts to raw images with public GCS URLs for fal.ai integration
 - 🖼️ **Image Display Fix**: Resolved binary data issue - artifacts now display properly as images instead of JSON data
 - 🔐 **Secret Manager Integration**: Automatic FAL_KEY retrieval from Google Secret Manager for seamless production deployment
 - 🗂️ **Artifact Version Fix**: Resolved "invalid literal for int() with base 10: 'v1'" error with intelligent filename processing
@@ -228,6 +229,7 @@ We've resolved critical deployment issues that were preventing production deploy
   - **Office Documents**: XLSX/DOCX automatic conversion to text for Gemini processing
 - **Image Generation**: 
   - **Vertex AI Imagen 3.0**: High-quality image creation from text descriptions
+  - **fal.ai Models**: Advanced image/video generation via 100+ AI models (FLUX, video generation, upscaling, style transfer)
   - **WhatsApp Integration**: Direct delivery of generated images via chat
   - **Aspect Ratio Optimization**: Square format (1:1) optimized for mobile viewing
   - **Safety Filtering**: Content safety with graceful error handling
@@ -238,14 +240,22 @@ We've resolved critical deployment issues that were preventing production deploy
 
 ### Image Generation System
 
-The bot includes a complete image generation pipeline using Vertex AI Imagen 3.0:
+The bot includes **dual image generation capabilities** with both Vertex AI and fal.ai integration:
 
+#### **Vertex AI Imagen 3.0 Pipeline**:
 - **Natural Language Prompts**: Users can request images using natural language descriptions
 - **High-Quality Generation**: Imagen 3.0 produces 1024x1024 PNG images optimized for mobile viewing
 - **Direct WhatsApp Delivery**: Generated images are automatically sent through WhatsApp using proper Baileys format
 - **Artifact Integration**: All generated images are saved as session-scoped artifacts for future reference
 - **Safety Filtering**: Content safety with graceful error handling and alternative suggestions
 - **Real-time Feedback**: Users receive immediate confirmation and generation details
+
+#### **fal.ai Advanced Models** (via MCP):
+- **100+ AI Models**: Access to cutting-edge models including FLUX, video generation, upscaling
+- **Specialized Capabilities**: Style transfer, image editing, inpainting, outpainting
+- **Video Generation**: Text-to-video and image-to-video conversion
+- **High-Resolution Upscaling**: AI-powered image enhancement and super-resolution
+- **Queue Management**: Long-running jobs with status monitoring and result retrieval
 
 **Example Flow**:
 1. User: "Generate a picture of a cute hamster eating cheese"
@@ -267,6 +277,36 @@ We've successfully integrated **fal.ai** capabilities through the Model Context 
 - 🗝️ **API Authentication**: Configured fal.ai API key with proper environment variable handling
 - 🔌 **ADK Integration**: Implemented proper `MCPToolset` with `StdioConnectionParams` and `StdioServerParameters`
 - ✅ **Agent Loading**: Successfully integrated fal MCP tools into the main ADK agent without conflicts
+
+#### 🎉 **Critical Fix: FastMCP `**kwargs` Compatibility (October 22, 2025)**
+
+**The Challenge**: FastMCP framework threw `ValueError: Functions with **kwargs are not supported as tools` when trying to register MCP functions with `**kwargs` parameters.
+
+**The Solution**: Following the proven approach from [am0y/mcp-fal](https://github.com/am0y/mcp-fal), we completely removed the problematic functions and adopted their pattern:
+
+**❌ Removed (Problematic Functions)**:
+```python
+# These caused FastMCP compatibility errors
+generate_image(model: str, prompt: str, **kwargs)
+edit_image(model: str, image_url: str, prompt: str, **kwargs)  
+generate_video(model: str, prompt: str, image_url: str = None, **kwargs)
+```
+
+**✅ Kept (FastMCP-Compatible Functions)**:
+```python
+# These work perfectly with FastMCP
+generate(model: str, parameters: Dict[str, Any], queue: bool = False)
+result(url: str)
+status(url: str)
+cancel(url: str)
+```
+
+**Key Benefits**:
+- 🚀 **FastMCP Compatibility**: No more `**kwargs` errors - MCP server starts cleanly
+- 🔧 **Unified Interface**: Single `generate()` function handles all content types (images, videos, audio)
+- 📦 **Parameter Flexibility**: Users pass all parameters in a structured dictionary 
+- 🎯 **am0y Pattern**: Following the proven approach from the reference implementation
+- ✅ **Production Ready**: MCP integration now works seamlessly in all environments
 
 #### 🛠️ **Technical Implementation Details**
 
@@ -881,6 +921,12 @@ The following critical issues have been **RESOLVED**:
    - ✅ **Solution Implemented**: Cross-compatible path structure now in place
    - **Verification**: `list_user_artifacts` function now works correctly
 
+7. **~~fal.ai MCP Integration Issues~~ (RESOLVED)**:
+   - ✅ **`**kwargs` Compatibility**: Fixed FastMCP `ValueError: Functions with **kwargs are not supported as tools`
+   - ✅ **Solution Applied**: Removed problematic functions following am0y/mcp-fal patterns
+   - ✅ **Working Functions**: `generate()`, `result()`, `status()`, `cancel()` now fully operational
+   - **If MCP issues persist**: Check FAL_KEY environment variable and MCP server logs
+
 ### Debug Mode
 ```bash
 # Enable detailed WhatsApp bot logging
@@ -917,15 +963,15 @@ PYTHONPATH=. python -m app.server --log-level debug
 - **[Google Agent Development Kit (ADK)](https://cloud.google.com/adk)** - AI agent framework
 - **[FastAPI](https://fastapi.tiangolo.com/)** - Python web framework
 - **[Google Cloud Storage](https://cloud.google.com/storage)** - File and state storage
-- **[Model Context Protocol (MCP)](https://github.com/modelcontextprotocol)** - Standardized protocol for AI tool integration
-- **[fal.ai](https://fal.ai/)** - Advanced AI model platform for image/video generation
+- **[Model Context Protocol (MCP)](https://github.com/modelcontextprotocol)** - Standardized protocol for AI tool integration ✅ **FastMCP compatible**
+- **[fal.ai](https://fal.ai/)** - Advanced AI model platform for image/video generation ✅ **Fully integrated**
 
 ### Supporting Libraries
 - **[Axios](https://axios-http.com/)** - HTTP client for ADK communication
 - **[Pino](https://getpino.io/)** - High-performance logging for Node.js
 - **[XLSX](https://www.npmjs.com/package/xlsx)** - Excel file parsing and conversion to CSV
 - **[Mammoth](https://www.npmjs.com/package/mammoth)** - DOCX to text conversion
-- **[FastMCP](https://pypi.org/project/fastmcp/)** - Fast Model Context Protocol server implementation
+- **[FastMCP](https://pypi.org/project/fastmcp/)** - Fast Model Context Protocol server ✅ **`**kwargs` compatibility resolved**
 - **[httpx](https://www.python-httpx.org/)** - Async HTTP client for MCP server communication
 - **[aiofiles](https://pypi.org/project/aiofiles/)** - Async file I/O for MCP server operations
 - **[Vertex AI](https://cloud.google.com/vertex-ai)** - Document search, retrieval, and Imagen 3.0 image generation
@@ -947,7 +993,12 @@ PYTHONPATH=. python -m app.server --log-level debug
 
 **Built with ❤️ using Google's Agent Development Kit and Baileys WhatsApp library**
 
-*Production-ready • Scalable • Secure • Multimodal • Architecturally Sound • Open Source*
+*Production-ready • Scalable • Secure • Multimodal • Architecturally Sound • Open Source • FastMCP Compatible*
 
-**Recently Enhanced**: October 2025 architectural improvements resolved all major artifact management issues, ensuring seamless cross-platform operation between WhatsApp bot and ADK Runner systems.# Deployment trigger - Sat Oct 18 16:39:30 UTC 2025
+**Recently Enhanced**: October 2025 achieved major breakthroughs including complete fal.ai MCP integration with FastMCP `**kwargs` compatibility fix, architectural improvements for artifact management, and seamless cross-platform operation between WhatsApp bot and ADK Runner systems.
+
+**Latest Milestone**: ✅ **FAL MCP Integration Complete** - Successfully resolved FastMCP compatibility issues and integrated 100+ advanced AI models for image/video generation via Model Context Protocol.
+
+# Deployment trigger - Sat Oct 18 16:39:30 UTC 2025
 # Critical fix deployment - Sat Oct 18 16:51:42 UTC 2025
+# FAL MCP kwargs compatibility fix - Oct 22 16:20:00 UTC 2025

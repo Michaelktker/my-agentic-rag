@@ -14,17 +14,20 @@ def register_generation_tools(mcp: FastMCP):
     """Register generation-related tools with the MCP server."""
     
     @mcp.tool()
-    async def generate(model: str, parameters: Dict[str, Any], queue: bool = False) -> Dict[str, Any]:
+    async def generate(model: str, parameters: Dict[str, Any], queue: bool = True) -> Dict[str, Any]:
         """
-        Generate content using a fal.ai model.
+        Generate content using a fal.ai model through the queue system.
+        
+        ALL operations are forced to use the queue for consistent long-running behavior.
+        This ensures proper integration with the LongRunningFunctionTool pattern.
         
         Args:
             model: The model ID to use (e.g., "fal-ai/flux/dev")
             parameters: Model-specific parameters as a dictionary
-            queue: Whether to use the queuing system (default: False)
+            queue: Always forced to True for consistent long-running behavior
             
         Returns:
-            The model's response
+            The queued request details with status_url, response_url, etc.
         """
         if not isinstance(model, str):
             model = str(model)
@@ -32,10 +35,8 @@ def register_generation_tools(mcp: FastMCP):
         sanitized_parameters = sanitize_parameters(parameters)
         
         try:
-            if queue:
-                url = f"{FAL_QUEUE_URL}/{model}"
-            else:
-                url = f"{FAL_DIRECT_URL}/{model}"
+            # Always use queue for consistent long-running behavior
+            url = f"{FAL_QUEUE_URL}/{model}"
             
             result = await authenticated_request(url, method="POST", json_data=sanitized_parameters)
             
@@ -43,6 +44,9 @@ def register_generation_tools(mcp: FastMCP):
             
         except FalAPIError as e:
             raise
+
+    # Removed problematic **kwargs functions to fix FastMCP compatibility
+    # Users should use the generic generate() function instead
 
     @mcp.tool()
     async def result(url: str) -> Dict[str, Any]:

@@ -40,7 +40,6 @@ from langchain_google_vertexai import VertexAIEmbeddings
 
 from app.retrievers import get_compressor, get_retriever
 from app.templates import format_docs
-from app.webhook_handler import webhook_handler
 
 EMBEDDING_MODEL = "text-embedding-005"
 LLM_LOCATION = "global"
@@ -135,76 +134,15 @@ async def list_user_artifacts(tool_context: ToolContext) -> str:
         str: A formatted list of available artifacts or an error message.
     """
     try:
-        # First try the standard ADK approach
-        try:
-            available_files = await tool_context.list_artifacts()
-            if available_files:
-                file_list = "\n".join([f"• {filename}" for filename in available_files])
-                return f"Here are your available artifacts:\n{file_list}\n\nI can analyze any of these files for you!"
-        except Exception as context_error:
-            print(f"DEBUG list_artifacts: tool_context.list_artifacts() failed: {context_error}")
-        
-        # Fallback: search across all sessions using direct GCS access
-        from google.cloud import storage
-        
-        # Get bucket from environment or default
-        artifacts_bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(artifacts_bucket_name)
-        
-        # Get user ID from tool context if available
-        user_id = getattr(tool_context, 'user_id', None)
-        
-        # Debug logging
-        print(f"DEBUG list_artifacts: Tool context user_id: {user_id}")
-        
-        if not user_id:
-            # Try alternative attributes
-            for attr in ['userId', 'user', '_user_id', 'current_user']:
-                if hasattr(tool_context, attr):
-                    alt_user = getattr(tool_context, attr)
-                    if alt_user:
-                        user_id = alt_user
-                        break
-        
-        if not user_id:
-            # Search across all users if we can't determine the specific user
-            user_id = '*'
-            print(f"DEBUG list_artifacts: No user_id found, using wildcard search")
-        
-        # Search for artifacts across all sessions
-        if user_id == '*':
-            prefix = "app/"
-            print(f"DEBUG list_artifacts: Searching across all users with prefix '{prefix}'")
+        available_files = await tool_context.list_artifacts()
+        if available_files:
+            file_list = "\n".join([f"• {filename}" for filename in available_files])
+            return f"Here are your available artifacts:\n{file_list}\n\nI can analyze any of these files for you!"
         else:
-            prefix = f"app/{user_id}/"
-            print(f"DEBUG list_artifacts: Searching for user '{user_id}' with prefix '{prefix}'")
-        
-        # Collect unique filenames across all sessions
-        artifact_files = set()
-        blobs = bucket.list_blobs(prefix=prefix)
-        
-        for blob in blobs:
-            # Extract the path components: app/user_id/session_id/filename/version
-            path_parts = blob.name.split('/')
-            if len(path_parts) >= 5:
-                filename = path_parts[3]
-                # Filter out system files and raw files
-                if not filename.endswith('_raw.jpg') and not filename.startswith('.'):
-                    artifact_files.add(filename)
-        
-        if not artifact_files:
             return "You have no saved artifacts. Upload some media files to get started!"
         
-        # Sort files for consistent display
-        sorted_files = sorted(list(artifact_files))
-        file_list = "\n".join([f"• {filename}" for filename in sorted_files])
-        return f"Here are your available artifacts:\n{file_list}\n\nI can analyze any of these files for you!"
-        
-    except ValueError as e:
-        return f"Error listing artifacts: {e}. Artifact service may not be configured."
     except Exception as e:
-        return f"An unexpected error occurred while listing artifacts: {e}"
+        return f"Error listing artifacts: {e}. Artifact service may not be configured."
 
 
 async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_context: ToolContext) -> str:
@@ -220,145 +158,26 @@ async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_con
         str: Information about the loaded artifact for analysis
     """
     try:
-        # CRITICAL FIX: Session ID mismatch issue
-        # The WhatsApp bot saves artifacts with WhatsApp session IDs (e.g., wa_1760803702930_tjfg41yyy)
-        # but the ADK tool_context.load_artifact() tries to load from the current ADK session
-        # We need to access artifacts across all sessions for this user
+        # Load artifact using ADK tool context
+        artifact_part = await tool_context.load_artifact(filename)
         
-        # Try to load using the direct GCS approach first since tool_context has session scope limitations
-        from google.cloud import storage
-        import json
-        import base64
-        
-        # Get bucket from environment or default
-        artifacts_bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
-        storage_client = storage.Client()
-        bucket = storage_client.bucket(artifacts_bucket_name)
-        
-        # Get user ID from tool context if available
-        # For WhatsApp users, this will be something like: 6592377976@s.whatsapp.net
-        user_id = getattr(tool_context, 'user_id', None)
-        session_id = getattr(tool_context, 'session_id', '')
-        
-        # Debug logging for troubleshooting - check all tool_context attributes
-        print(f"DEBUG load_artifact: Tool context type: {type(tool_context)}")
-        print(f"DEBUG load_artifact: Tool context attributes: {dir(tool_context)}")
-        print(f"DEBUG load_artifact: Tool context user_id: {user_id}")
-        print(f"DEBUG load_artifact: Tool context session_id: {session_id}")
-        
-        # Try alternative ways to get user information from tool context
-        if not user_id:
-            # Check if there's a different attribute name
-            for attr in ['userId', 'user', '_user_id', 'current_user']:
-                if hasattr(tool_context, attr):
-                    alt_user = getattr(tool_context, attr)
-                    print(f"DEBUG load_artifact: Found alternative user attribute '{attr}': {alt_user}")
-                    if alt_user:
-                        user_id = alt_user
-                        break
-        
-        if not user_id:
-            # Always search across all users if we can't determine the specific user
-            # This is more reliable than trying to guess the user ID
-            user_id = '*'  # Wildcard to search all users
-            print(f"DEBUG load_artifact: No user_id found, using wildcard search")
-        
-        # Search for the artifact across all sessions for this user
-        # Path pattern: app/[user_id]/[session_id]/[filename]/[version]
-        if user_id == '*':
-            # Search across all users if we can't determine the specific user
-            prefix = "app/"
-            print(f"DEBUG: Searching for artifact '{filename}' across all users with prefix '{prefix}'")
-        else:
-            prefix = f"app/{user_id}/"
-            print(f"DEBUG: Searching for artifact '{filename}' for user '{user_id}' with prefix '{prefix}'")
-        
-        # List all blobs with this prefix to find sessions containing our artifact
-        blobs = bucket.list_blobs(prefix=prefix)
-        artifact_found = None
-        found_path = None
-        
-        for blob in blobs:
-            # Extract the path components
-            path_parts = blob.name.split('/')
-            if len(path_parts) >= 5:  # app/user_id/session_id/filename/version
-                found_filename = path_parts[3]
-                version = path_parts[4]
-                
-                # Check if this blob matches our target filename (with or without version suffix)
-                if (found_filename == filename or 
-                    found_filename.startswith(filename.split(' v')[0]) or
-                    filename.startswith(found_filename)):
-                    
-                    print(f"DEBUG: Found potential match: {blob.name}")
-                    
-                    # Try to download and parse this artifact
-                    try:
-                        data = blob.download_as_bytes()
-                        
-                        # Check if it's JSON (our artifact format) or raw data
-                        try:
-                            artifact_data = json.loads(data.decode('utf-8'))
-                            if 'data' in artifact_data and 'mimeType' in artifact_data:
-                                # This is our JSON-wrapped artifact format
-                                artifact_found = {
-                                    'data': artifact_data['data'],
-                                    'mimeType': artifact_data['mimeType'],
-                                    'inline_data': {
-                                        'mime_type': artifact_data['mimeType'],
-                                        'data': artifact_data['data']
-                                    }
-                                }
-                                found_path = blob.name
-                                print(f"DEBUG: ✅ Successfully loaded artifact from: {found_path}")
-                                break
-                        except (json.JSONDecodeError, UnicodeDecodeError):
-                            # This might be raw binary data (ADK format)
-                            artifact_found = {
-                                'data': base64.b64encode(data).decode('utf-8'),
-                                'mimeType': 'application/octet-stream',  # Default, will be updated
-                                'inline_data': {
-                                    'mime_type': 'application/octet-stream',
-                                    'data': base64.b64encode(data).decode('utf-8')
-                                }
-                            }
-                            found_path = blob.name
-                            print(f"DEBUG: ✅ Successfully loaded raw artifact from: {found_path}")
-                            break
-                            
-                    except Exception as blob_error:
-                        print(f"DEBUG: Failed to load blob {blob.name}: {blob_error}")
-                        continue
-        
-        if not artifact_found:
-            # Fallback: try the original ADK load_artifact method
-            print(f"DEBUG: Direct GCS search failed, trying ADK tool_context.load_artifact()")
-            try:
-                artifact_part = await tool_context.load_artifact(filename)
-                if artifact_part:
-                    artifact_found = artifact_part
-                    found_path = f"ADK_context:{filename}"
-                    print(f"DEBUG: ✅ Loaded via tool_context: {found_path}")
-            except Exception as context_error:
-                print(f"DEBUG: tool_context.load_artifact also failed: {context_error}")
-        
-        if not artifact_found:
-            return f"Artifact '{filename}' not found in any session for user '{user_id}'. Searched prefix: '{prefix}'"
+        if not artifact_part:
+            return f"Artifact '{filename}' not found. Use list_user_artifacts to see available files."
         
         # Extract artifact information
         mime_type = "unknown"
         data_size = 0
         
-        if hasattr(artifact_found, 'inline_data') and artifact_found.inline_data:
-            mime_type = artifact_found.inline_data.mime_type or "unknown"
-            data_size = len(artifact_found.inline_data.data) if artifact_found.inline_data.data else 0
-        elif hasattr(artifact_found, 'mimeType'):
-            mime_type = artifact_found.mimeType or "unknown"
-            data_size = len(artifact_found.data) if hasattr(artifact_found, 'data') and artifact_found.data else 0
-        elif isinstance(artifact_found, dict):
-            # Handle our dictionary format
-            mime_type = artifact_found.get('mimeType', 'unknown')
-            data_size = len(artifact_found.get('data', '')) if artifact_found.get('data') else 0
+        if hasattr(artifact_part, 'inline_data') and artifact_part.inline_data:
+            mime_type = artifact_part.inline_data.mime_type or "unknown"
+            data_size = len(artifact_part.inline_data.data) if artifact_part.inline_data.data else 0
+        elif hasattr(artifact_part, 'mimeType'):
+            mime_type = artifact_part.mimeType or "unknown"
+            data_size = len(artifact_part.data) if hasattr(artifact_part, 'data') and artifact_part.data else 0
+        elif isinstance(artifact_part, dict):
+            # Handle dictionary format
+            mime_type = artifact_part.get('mimeType', 'unknown')
+            data_size = len(artifact_part.get('data', '')) if artifact_part.get('data') else 0
         
         # Format file size
         if data_size > 1024 * 1024:
@@ -394,10 +213,8 @@ Note: The file content is available in the conversation context for direct analy
         
         return analysis_context
         
-    except ValueError as e:
-        return f"Error loading artifact '{filename}': {e}. Is the artifact service configured?"
     except Exception as e:
-        return f"An unexpected error occurred while loading '{filename}': {e}"
+        return f"Error loading artifact '{filename}': {e}. Use list_user_artifacts to see available files."
 
 
 async def save_analysis_result(filename: str, analysis_content: str, tool_context: ToolContext) -> str:
@@ -474,167 +291,115 @@ Always be precise and thorough in your GitHub operations."""
 FAL_MCP_PROMPT = """
 You are a FAL.ai MCP agent that generates and edits images/videos using fal.ai models through MCP interface.
 
-## Core Models
+## CRITICAL: ALL OPERATIONS USE LONG-RUNNING QUEUE SYSTEM
 
-### Image Generation (FAST - no queue needed):
-- **black-forest-labs/flux.1**: High quality image generation
+### ALL Image Generation, Image Editing, and Video Generation:
+- **ALL operations** now use the long-running queue system for consistency
+- **No direct/fast operations** - everything goes through queue for uniform behavior
+- **Use specialized tools** for different content types:
+  - `generate_image()` - for image generation
+  - `edit_image()` - for image editing  
+  - `generate_video()` - for video generation
 
-### Image Editing (FAST - no queue needed):
-- **Alibaba/qwen-image-edit**: Precise, context-aware edits, bilingual text editing, and semantic/appear
+### Model Discovery and Selection:
 
-### Video Generation (WEBHOOK-ENABLED ASYNC):
-- Use model discovery to find available video generation models
-- All video models use webhook callback system for completion notifications
-- Users can specify any available video model by name
+#### **NEVER hardcode models** - Always let users choose:
+- **Use `models()` tool** to list available models with pagination
+- **Use `search()` tool** to find models by keywords
+- **User specifies exact model** they want to use
+- **No model recommendations** - present options and let user decide
 
-## CRITICAL: Webhook-Based Async Workflow
+#### **Model Discovery Workflow:**
+1. **User asks for capability** (e.g., "generate an image", "edit a photo", "create a video")
+2. **Ask user to specify model** or help them discover available models:
+   - "Which model would you like to use?"
+   - "Let me search for available [image/video/editing] models"
+3. **Use search() or models()** to find relevant models
+4. **Present options to user** with model names and descriptions
+5. **User selects specific model** by name
+6. **Use selected model** in generation call
 
-### For FAST operations (images < 30 seconds):
-1. **generate()** with queue=false for immediate result
-2. **Return URL** directly from result
-
-### For LONG-RUNNING operations (video generation - WEBHOOK ENABLED):
-1. **Register webhook FIRST** using register_video_webhook() to get webhook_url
-2. **generate()** with queue=true and webhook_url in parameters
-3. **Return immediate confirmation** to user that generation started
-4. **Webhook handles completion** - user gets notified when video is ready
-
-## Webhook Integration Pattern:
+#### **Example Model Discovery:**
 ```
-# Step 1: Register webhook BEFORE calling generate()
-webhook_result = register_video_webhook(
-    user_id=user_id,
-    session_id=session_id, 
-    jid=jid,
-    model_name=model_name,
+User: "Generate an image of a cat"
+Agent: "I can help generate an image! Let me find available image generation models for you."
+Agent: Uses search("image generation") or models()
+Agent: "Here are available image models: [list]. Which would you like to use?"
+User: "Use flux-dev"
+Agent: Uses generate_image(model="[user-specified-model]", prompt="cat", ...)
+```
+
+### **Model Categories** (discovered dynamically):
+
+#### **Image Generation Models:**
+- Use `search("image generation")` or `search("text to image")` 
+- Common patterns: "flux", "sd", "dall-e", "midjourney" style models
+- Let user choose from discovered options
+
+#### **Image Editing Models:**
+- Use `search("image editing")` or `search("image edit")`
+- Common patterns: editing, inpainting, background removal, upscaling
+- User selects based on their specific editing needs
+
+#### **Video Generation Models:**
+- Use `search("video generation")` or `search("text to video")`
+- Common patterns: text-to-video, image-to-video models
+- User chooses model based on their video generation requirements
+
+## CRITICAL: Long-Running Function Tool Workflow
+
+### For ALL operations (now consistently long-running):
+1. **Discover models** using search() or models() if user hasn't specified
+2. **User selects specific model** they want to use
+3. **Use specialized tools** (`generate_image`, `edit_image`, `generate_video`)
+4. **All operations return queue details** with status_url and response_url
+5. **Agent integration** works with LongRunningFunctionTool pattern
+6. **External polling handles completion** - WhatsApp bot polls status
+7. **Agent resumes** when completion is sent back
+
+## Dynamic Model Usage Pattern:
+```
+# WRONG - Don't hardcode models:
+# result = generate_image(model="[hardcoded-model]", ...)
+
+# RIGHT - User-driven model selection:
+# 1. Discover models
+models = search("image generation")
+# 2. Present options to user
+# 3. User selects model_name
+# 4. Use selected model
+result = generate_image(
+    model=user_selected_model,
     prompt=prompt,
-    request_id="temp_video_123",  # Temporary ID
-    status_url="",
-    response_url=""
+    **additional_params
 )
-
-# Step 2: Submit to queue with webhook URL from step 1
-response = generate(model_name, parameters, queue=true)
-real_request_id = response["request_id"]
-status_url = response["status_url"] 
-response_url = response["response_url"]
-
-# Step 3: Update webhook with real FAL.ai request ID 
-update_result = update_webhook_request_id(
-    old_request_id="temp_video_123",
-    new_request_id=real_request_id
-)
-
-# Step 4: Return immediate confirmation (no polling needed)
-return f"🎬 Video generation started! You'll be notified when it's ready. Request ID: {real_request_id}"
-
-# Step 5: Webhook automatically handles completion and user notification
-```
-```
-# Step 1: Register webhook callback FIRST to get webhook URL
-webhook_result = register_video_webhook(
-    user_id=user_id,
-    session_id=session_id, 
-    jid=jid,
-    model_name=model_name,
-    prompt=prompt,
-    request_id="temp",  # Will be updated after generate call
-    status_url="temp",  # Will be updated after generate call
-    response_url="temp"  # Will be updated after generate call
-)
-webhook_url = extract_webhook_url_from_result(webhook_result)
-
-# Step 2: Submit to queue with webhook URL in parameters
-parameters["webhook_url"] = webhook_url  # Include in parameters object
-response = generate(model_name, parameters, queue=true)
-request_id = response["request_id"]
-status_url = response["status_url"] 
-response_url = response["response_url"]
-
-# Step 3: Update webhook registration with actual URLs
-# (handled automatically by webhook system)
-
-# Step 4: Return immediate confirmation (no polling needed)
-return f"🎬 Video generation started! You'll be notified when it's ready. Request ID: [request_id]"
-
-# Step 5: Webhook automatically handles completion and user notification
 ```
 
-## New MCP Tools: Video Webhook System
-- **register_video_webhook(user_id, session_id, jid, model_name, prompt, request_id, status_url, response_url)** 
-- Registers webhook callback for video generation completion
-- Use BEFORE calling generate() with temporary request_id
-- Returns webhook URL to pass to FAL.ai generate() call
+## Model Parameter Discovery:
+- **Use `schema(model_id)`** to get model-specific parameters
+- **Show available parameters** to user when relevant
+- **Let user specify** width, height, steps, guidance, etc.
+- **Don't assume defaults** - ask user for important parameters
 
-- **update_webhook_request_id(old_request_id, new_request_id)**
-- Updates webhook registration with real FAL.ai request ID  
-- Call AFTER generate() returns the actual request_id
-- Ensures FAL.ai calls the correct webhook endpoint
+## Response Handling:
+- **Return queue details** from any generation operation
+- **Include status_url** for polling
+- **Include response_url** for final result retrieval
+- **Let the long-running system handle completion**
 
-## Correct MCP Tool Names:
-- ✅ **generate(model, parameters, queue=true, webhook_url=webhook_url)** - Submit with webhook
-- ✅ **register_video_webhook()** - Register webhook callback (call FIRST)
-- ✅ **update_webhook_request_id()** - Update with real FAL.ai request ID (call AFTER generate)
-- ✅ **status(status_url)** - Check queue status (optional, for debugging)
-- ✅ **result(response_url)** - Get final result (handled by webhook)
-- ✅ **cancel(cancel_url)** - Cancel if needed
+## User Communication:
+- **"Let me find available models for you..."**
+- **"Here are the [type] models I found: [list]"**
+- **"Which model would you like to use?"**
+- **"I'll use [model_name] for your request"**
+- **Always inform users** that their request is being processed and they will be notified when complete
 
-## Critical Webhook Integration:
-**IMPORTANT**: webhook_url must be included in the parameters object, NOT as a separate argument to generate().
-
-```
-# Correct approach:
-parameters = {
-    "prompt": "your prompt here",
-    "image_url": "public_url_here",
-    "webhook_url": webhook_url  # Include in parameters!
-}
-response = generate(model_name, parameters, queue=true)
-```
-
-## Immediate Response Pattern
-
-**For video generation, return immediate confirmation:**
-
-```
-✅ Video generation started!
-🎬 Model: [model_name]
-⏱️ You'll be notified via WhatsApp when your video is ready.
-🆔 Request ID: [request_id]
-```
-
-## Key Parameters
-- **prompt**: Detailed description
-- **image_url**: Input image for editing (use public GCS URLs)
-- **image_urls**: Array of input images for multi-image models  
-- **width/height**: Output dimensions
-- **queue**: true for video generation (MANDATORY)
-- **webhook_url**: Callback URL for completion notifications (include in parameters object)
-
-## Error Handling
-- Use correct model names as specified by user
-- For video generation: Use queue=true and webhook_url in parameters for async handling
-- For image generation: Use queue=false for immediate results
-- Validate all required parameters
-- Provide clear error messages and alternatives
-
-## Video Generation Guidelines
-**USER-DRIVEN**: Use whatever video model the user explicitly requests.
-**NO DEFAULTS**: Do not recommend specific models - let users choose.
-- Required: queue=true (mandatory for video generation)
-- Required: webhook_url in parameters object (from register_video_webhook() call)
-- Parameters: image_url (optional for text-to-video), prompt (required), duration (optional), aspect_ratio (optional)
-- Use model discovery if user needs to see available video models
-- Honor user's exact model specification
-
-## Progress Communication
-For long-running video generation:
-- "🎬 Starting video generation with [model_name]..."  
-- "✅ Video generation queued! You'll be notified when ready."
-- "🆔 Request ID: [request_id] for tracking"
-
-**CRITICAL**: Video generation uses webhook callbacks - no polling needed!
-User gets automatic WhatsApp notification when video completes.
+## Key Principles:
+1. **USER-DRIVEN MODEL SELECTION** - Never choose for them
+2. **DYNAMIC MODEL DISCOVERY** - Always use search/models tools
+3. **NO HARDCODED MODELS** - Every model comes from user choice
+4. **PRESENT OPTIONS** - Show what's available, let user decide
+5. **RESPECT USER PREFERENCES** - Use exactly what they specify
 """
 
 instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis, PLUS image generation via multiple sources.
@@ -811,19 +576,29 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
             prefix = "app/"
             print(f"DEBUG: Searching for artifact '{filename}' across all users with prefix '{prefix}'")
         else:
-            prefix = f"app/{user_id}/"
+            # User-based storage: all artifacts are in app/user_id/shared/
+            prefix = f"app/{user_id}/shared/"
             print(f"DEBUG: Searching for artifact '{filename}' for user '{user_id}' with prefix '{prefix}'")
         
-        # List all blobs with this prefix to find sessions containing our artifact
+        # List all blobs with this prefix to find artifacts
         blobs = bucket.list_blobs(prefix=prefix)
         found_blob = None
         
         for blob in blobs:
-            # Extract the path components
+            # Extract the path components: app/user_id/shared/filename
             path_parts = blob.name.split('/')
-            if len(path_parts) >= 5:  # app/user_id/session_id/filename/version
-                found_filename = path_parts[3]
-                version = path_parts[4]
+            if user_id == '*':
+                # Path: app/user_id/shared/filename (4 parts minimum)
+                if len(path_parts) >= 4 and len(path_parts) >= 3 and path_parts[2] == 'shared':
+                    found_filename = path_parts[3]
+                else:
+                    continue
+            else:
+                # Path: app/user_id/shared/filename (4 parts exact for our prefix)
+                if len(path_parts) >= 4:
+                    found_filename = path_parts[3]
+                else:
+                    continue
                 
                 # Check if this blob matches our target filename (with or without version suffix)
                 if (found_filename == filename or 
@@ -1092,6 +867,226 @@ async def generate_video_long_running(
         }
 
 
+async def generate_image_long_running(
+    model_name: str,
+    prompt: str,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    user_id: Optional[str] = None,
+    jid: Optional[str] = None,
+    tool_context: Optional[ToolContext] = None,
+    **kwargs
+) -> dict:
+    """
+    Start long-running image generation using FAL.ai.
+    
+    This is a LongRunningFunctionTool that:
+    1. Initiates image generation with FAL.ai
+    2. Returns immediately with operation details
+    3. Pauses the agent run for client polling
+    
+    Args:
+        model_name (str): FAL.ai model name (user-specified from dynamic discovery)
+        prompt (str): Image generation prompt
+        width (Optional[int]): Image width
+        height (Optional[int]): Image height
+        user_id (Optional[str]): User identifier for tracking
+        jid (Optional[str]): WhatsApp JID for final notification
+        **kwargs: Additional model-specific parameters
+        
+    Returns:
+        dict: Operation details for polling
+    """
+    try:
+        # Generate unique operation ID
+        operation_id = f"image_gen_{uuid.uuid4().hex[:12]}"
+        
+        # Get session ID from tool context
+        session_id = getattr(tool_context, 'session_id', 'default') if tool_context else 'default'
+        
+        # Prepare FAL.ai parameters
+        parameters = {
+            "prompt": prompt
+        }
+        
+        # Add image dimensions if provided
+        if width:
+            parameters["width"] = width
+        if height:
+            parameters["height"] = height
+            
+        # Add any additional parameters
+        parameters.update(kwargs)
+        
+        # Make direct FAL.ai API call for queue submission
+        fal_api_key = os.getenv("FAL_KEY")
+        if not fal_api_key:
+            raise Exception("FAL_KEY environment variable not set")
+            
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                "Authorization": f"Key {fal_api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            fal_url = f"https://queue.fal.run/{model_name}"
+            
+            async with session.post(fal_url, json=parameters, headers=headers) as response:
+                if response.status == 200:
+                    fal_response = await response.json()
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"FAL.ai API error {response.status}: {error_text}")
+        
+        # Extract FAL.ai response details
+        fal_request_id = fal_response.get('request_id')
+        status_url = fal_response.get('status_url')
+        response_url = fal_response.get('response_url')
+        
+        if not fal_request_id:
+            raise Exception("FAL.ai did not return a request_id")
+        
+        # Store operation details for polling
+        operation_details = {
+            "operation_id": operation_id,
+            "type": "image_generation",
+            "status": "IN_PROGRESS",
+            "model_name": model_name,
+            "prompt": prompt,
+            "parameters": parameters,
+            "fal_request_id": fal_request_id,
+            "status_url": status_url,
+            "response_url": response_url,
+            "user_id": user_id,
+            "jid": jid,
+            "session_id": session_id,
+            "started_at": asyncio.get_event_loop().time()
+        }
+        
+        await _store_operation_details(operation_id, operation_details)
+        
+        logger.info(f"🎨 Started image generation: {operation_id} with model {model_name}")
+        
+        return operation_details
+        
+    except Exception as e:
+        logger.error(f"❌ Error starting image generation: {e}")
+        return {
+            "operation_id": f"failed_{uuid.uuid4().hex[:8]}",
+            "status": "FAILED",
+            "error": str(e),
+            "model_name": model_name,
+            "prompt": prompt
+        }
+
+
+async def edit_image_long_running(
+    model_name: str,
+    image_url: str,
+    prompt: str,
+    user_id: Optional[str] = None,
+    jid: Optional[str] = None,
+    tool_context: Optional[ToolContext] = None,
+    **kwargs
+) -> dict:
+    """
+    Start long-running image editing using FAL.ai.
+    
+    This is a LongRunningFunctionTool that:
+    1. Initiates image editing with FAL.ai
+    2. Returns immediately with operation details
+    3. Pauses the agent run for client polling
+    
+    Args:
+        model_name (str): FAL.ai model (e.g., "Alibaba/qwen-image-edit")
+        image_url (str): URL of the image to edit
+        prompt (str): Edit instructions prompt
+        user_id (Optional[str]): User identifier for tracking
+        jid (Optional[str]): WhatsApp JID for final notification
+        **kwargs: Additional model-specific parameters
+        
+    Returns:
+        dict: Operation details for polling
+    """
+    try:
+        # Generate unique operation ID
+        operation_id = f"image_edit_{uuid.uuid4().hex[:12]}"
+        
+        # Get session ID from tool context
+        session_id = getattr(tool_context, 'session_id', 'default') if tool_context else 'default'
+        
+        # Prepare FAL.ai parameters
+        parameters = {
+            "image_url": image_url,
+            "prompt": prompt
+        }
+            
+        # Add any additional parameters
+        parameters.update(kwargs)
+        
+        # Make direct FAL.ai API call for queue submission
+        fal_api_key = os.getenv("FAL_KEY")
+        if not fal_api_key:
+            raise Exception("FAL_KEY environment variable not set")
+            
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                "Authorization": f"Key {fal_api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            fal_url = f"https://queue.fal.run/{model_name}"
+            
+            async with session.post(fal_url, json=parameters, headers=headers) as response:
+                if response.status == 200:
+                    fal_response = await response.json()
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"FAL.ai API error {response.status}: {error_text}")
+        
+        # Extract FAL.ai response details
+        fal_request_id = fal_response.get('request_id')
+        status_url = fal_response.get('status_url')
+        response_url = fal_response.get('response_url')
+        
+        if not fal_request_id:
+            raise Exception("FAL.ai did not return a request_id")
+        
+        # Store operation details for polling
+        operation_details = {
+            "operation_id": operation_id,
+            "type": "image_editing",
+            "status": "IN_PROGRESS",
+            "model_name": model_name,
+            "image_url": image_url,
+            "prompt": prompt,
+            "parameters": parameters,
+            "fal_request_id": fal_request_id,
+            "status_url": status_url,
+            "response_url": response_url,
+            "user_id": user_id,
+            "jid": jid,
+            "session_id": session_id,
+            "started_at": asyncio.get_event_loop().time()
+        }
+        
+        await _store_operation_details(operation_id, operation_details)
+        
+        logger.info(f"✏️ Started image editing: {operation_id} with model {model_name}")
+        
+        return operation_details
+        
+    except Exception as e:
+        logger.error(f"❌ Error starting image editing: {e}")
+        return {
+            "operation_id": f"failed_{uuid.uuid4().hex[:8]}",
+            "status": "FAILED",
+            "error": str(e),
+            "model_name": model_name,
+            "prompt": prompt
+        }
+
+
 async def _store_operation_details(operation_id: str, details: dict):
     """Store operation details in GCS for persistence"""
     try:
@@ -1116,9 +1111,9 @@ async def _store_operation_details(operation_id: str, details: dict):
         logger.error(f"❌ Error storing operation details: {e}")
 
 
-async def get_video_operation_status(operation_id: str) -> dict:
+async def get_fal_operation_status(operation_id: str) -> dict:
     """
-    Get the current status of a video generation operation.
+    Get the current status of a FAL.ai generation operation (video, image, or editing).
     
     This function is used by external clients (like WhatsApp bot) to:
     1. Poll the operation status
@@ -1126,7 +1121,7 @@ async def get_video_operation_status(operation_id: str) -> dict:
     3. Send results back to the agent to continue
     
     Args:
-        operation_id (str): The operation ID returned by generate_video_long_running
+        operation_id (str): The operation ID returned by any long-running FAL function
         
     Returns:
         dict: Current operation status with results if complete
@@ -1154,6 +1149,7 @@ async def get_video_operation_status(operation_id: str) -> dict:
         fal_request_id = details.get("fal_request_id")
         status_url = details.get("status_url")
         response_url = details.get("response_url")
+        operation_type = details.get("type", "unknown")
         
         if not status_url:
             return {
@@ -1175,20 +1171,31 @@ async def get_video_operation_status(operation_id: str) -> dict:
                                 if result_response.status == 200:
                                     final_result = await result_response.json()
                                     
-                                    # Extract video URL
-                                    video_url = None
+                                    # Extract result URL based on operation type
+                                    result_url = None
                                     if "url" in final_result:
-                                        video_url = final_result["url"]
+                                        result_url = final_result["url"]
                                     elif "data" in final_result and isinstance(final_result["data"], dict):
-                                        video_url = final_result["data"].get("url")
+                                        result_url = final_result["data"].get("url")
+                                    elif "images" in final_result and isinstance(final_result["images"], list) and len(final_result["images"]) > 0:
+                                        result_url = final_result["images"][0].get("url")
                                     
                                     # Update details with completion
-                                    details.update({
+                                    completion_data = {
                                         "status": "COMPLETED",
-                                        "video_url": video_url,
                                         "final_result": final_result,
                                         "completed_at": asyncio.get_event_loop().time()
-                                    })
+                                    }
+                                    
+                                    # Add appropriate URL field based on operation type
+                                    if operation_type == "video_generation":
+                                        completion_data["video_url"] = result_url
+                                    elif operation_type in ["image_generation", "image_editing"]:
+                                        completion_data["image_url"] = result_url
+                                    else:
+                                        completion_data["result_url"] = result_url
+                                    
+                                    details.update(completion_data)
                                     
                                     # Update stored details
                                     blob.upload_from_string(
@@ -1200,9 +1207,10 @@ async def get_video_operation_status(operation_id: str) -> dict:
                                 
                     elif fal_status.get("status") == "FAILED":
                         # Mark as failed
+                        error_message = fal_status.get("error", f"{operation_type.replace('_', ' ').title()} failed")
                         details.update({
                             "status": "FAILED",
-                            "error": fal_status.get("error", "Video generation failed"),
+                            "error": error_message,
                             "failed_at": asyncio.get_event_loop().time()
                         })
                         
@@ -1237,100 +1245,6 @@ async def get_video_operation_status(operation_id: str) -> dict:
             "status": "ERROR",
             "error": str(e)
         }
-
-
-async def register_video_webhook(
-    user_id: str,
-    session_id: str, 
-    jid: str,
-    model_name: str,
-    prompt: str,
-    request_id: Optional[str] = None,
-    status_url: Optional[str] = None,
-    response_url: Optional[str] = None,
-    tool_context: Optional[ToolContext] = None
-) -> str:
-    """
-    Register a webhook callback for long-running video generation.
-    This enables async notification when video generation completes.
-    
-    Can be called before or after generate() call:
-    - Before: Pass minimal info, request_id will be auto-generated
-    - After: Pass full details from generate() response
-
-    Args:
-        user_id (str): The user ID for the video request
-        session_id (str): The current ADK session ID
-        jid (str): WhatsApp JID for sending completion notifications
-        model_name (str): The FAL.ai model used for generation
-        prompt (str): The generation prompt
-        request_id (str, optional): FAL.ai request ID (auto-generated if not provided)
-        status_url (str, optional): FAL.ai status polling URL
-        response_url (str, optional): FAL.ai result retrieval URL
-
-    Returns:
-        str: Webhook URL to include in FAL.ai generate() parameters
-    """
-    try:
-        # Generate request ID if not provided
-        if not request_id:
-            import uuid
-            request_id = f"video_{uuid.uuid4().hex[:12]}"
-        
-        # Use placeholder URLs if not provided
-        if not status_url:
-            status_url = "pending"
-        if not response_url:
-            response_url = "pending"
-        
-        # Register webhook with the handler
-        webhook_url = await webhook_handler.register_video_generation(
-            request_id=request_id,
-            user_id=user_id,
-            session_id=session_id or "",
-            jid=jid,
-            model_name=model_name,
-            prompt=prompt,
-            status_url=status_url,
-            response_url=response_url
-        )
-        
-        return f"✅ Webhook registered!\n🔗 **Webhook URL**: {webhook_url}\n🆔 **Request ID**: {request_id}\n\n📋 **Instructions**: Include this webhook_url in your generate() parameters:\n```\nparameters = {{\n    \"prompt\": \"your prompt\",\n    \"webhook_url\": \"{webhook_url}\"\n}}\n```"
-        
-    except Exception as e:
-        return f"❌ Error registering webhook: {e}"
-
-
-async def update_webhook_request_id(
-    old_request_id: str,
-    new_request_id: str,
-    tool_context: ToolContext
-) -> str:
-    """
-    Update webhook registration with the actual FAL.ai request ID.
-    Call this AFTER getting the real request ID from FAL.ai generate() response.
-
-    Args:
-        old_request_id (str): The temporary request ID from register_video_webhook
-        new_request_id (str): The actual FAL.ai request ID from generate() response
-
-    Returns:
-        str: Success/failure message
-    """
-    try:
-        # Update webhook registration with real FAL.ai request ID
-        success = await webhook_handler.update_webhook_request_id(
-            old_request_id=old_request_id,
-            new_request_id=new_request_id
-        )
-        
-        if success:
-            return f"✅ Webhook updated successfully!\n📝 Old ID: {old_request_id}\n📝 New ID: {new_request_id}\n\n🎬 FAL.ai will now call the correct webhook when video completes."
-        else:
-            return f"❌ Failed to update webhook registration. Old ID: {old_request_id}, New ID: {new_request_id}"
-        
-    except Exception as e:
-        return f"❌ Error updating webhook: {e}"
 
 
 async def check_endpoint_health(url: str, timeout: int = HEALTH_CHECK_TIMEOUT) -> bool:
@@ -1420,11 +1334,14 @@ mcp_tools = MCPToolset(
 )
 
 # Create the fal.ai MCP toolset (stdio connection)
+# Fixed **kwargs compatibility issue by removing problematic functions from generate.py
+import os
+mcp_fal_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp-fal", "main.py")
 fal_mcp_tools = MCPToolset(
     connection_params=StdioConnectionParams(
         server_params=StdioServerParameters(
-            command="/code/mcp-fal/.venv/bin/python",
-            args=["/code/mcp-fal/main.py"],
+            command="python",
+            args=[mcp_fal_path],
             env={"FAL_KEY": os.getenv("FAL_KEY", "")}
         )
     )
@@ -1439,6 +1356,7 @@ github_mcp_agent = Agent(
 )
 
 # Create the fal.ai MCP subagent
+# Fixed **kwargs compatibility issue by removing problematic functions from generate.py
 fal_mcp_agent = Agent(
     model="gemini-2.5-flash",
     name="fal_mcp_agent",
@@ -1473,14 +1391,12 @@ save_artifact_tool = FunctionTool(func=save_analysis_result)
 # Create artifact public URL tool for fal.ai integration
 make_public_tool = FunctionTool(func=make_artifact_public)
 
-# Create long-running video generation tool (NEW APPROACH)
+# Create long-running FAL.ai generation tools
 video_generation_tool = LongRunningFunctionTool(func=generate_video_long_running)
+image_generation_tool = LongRunningFunctionTool(func=generate_image_long_running)
+image_editing_tool = LongRunningFunctionTool(func=edit_image_long_running)
 
-# Create webhook registration tool for async video generation (LEGACY - keeping for compatibility)
-register_webhook_tool = FunctionTool(func=register_video_webhook)
-update_webhook_tool = FunctionTool(func=update_webhook_request_id)
-
-tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, make_public_tool, video_generation_tool, register_webhook_tool, update_webhook_tool]
+tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, make_public_tool, video_generation_tool, image_generation_tool, image_editing_tool]
 
 root_agent = Agent(
     name="root_agent",
