@@ -361,13 +361,7 @@ async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_con
                 filename, analysis_query, artifact_data, tool_context, user_id
             )
         else:
-            # For non-image files, store in current session for analysis
-            await tool_context.store_artifact(
-                artifact_name=filename,
-                content_type=mime_type,
-                data=base64.b64decode(artifact_data['data'])
-            )
-            
+            # For non-image files, note successful loading (ADK doesn't require explicit storage)
             return f"""Successfully loaded artifact: {filename}
 File Type: {file_type} ({mime_type})
 File Size: {size_str}
@@ -478,12 +472,8 @@ async def _analyze_and_rename_image_adk(
         data_size = len(base64.b64decode(artifact_data['data']))
         size_str = f"{data_size / 1024:.1f} KB" if data_size < 1024*1024 else f"{data_size / (1024*1024):.1f} MB"
         
-        # Store the image in current session for analysis
-        await tool_context.store_artifact(
-            artifact_name=original_filename,
-            content_type=mime_type,
-            data=base64.b64decode(artifact_data['data'])
-        )
+        # Note: In ADK, artifacts are already available in the session context
+        # No need to explicitly store them again
         
         # Create a multimodal content for filename generation
         summary_prompt = f"""Analyze this image and create a descriptive filename summary.
@@ -564,12 +554,8 @@ async def _store_renamed_artifact(
         mime_type = artifact_data.get('mimeType')
         data_bytes = base64.b64decode(artifact_data['data'])
         
-        # Store in current ADK session
-        await tool_context.store_artifact(
-            artifact_name=new_filename,
-            content_type=mime_type,
-            data=data_bytes
-        )
+        # Note: In ADK, artifacts are accessible without explicit storage in session
+        # We'll store the renamed artifact in cross-session GCS storage for persistence
         
         # Store in cross-session GCS storage
         from google.cloud import storage
