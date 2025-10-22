@@ -259,10 +259,10 @@ class GcsArtifactService {
         try {
             const artifactPath = this.getArtifactPath(appName, userId, filename, sessionId);
             
-            // Convert Part object to storage format
+            // Convert Part object to storage format - ensure we store the data correctly
             const artifactData = {
-                mimeType: part.mimeType || part.inline_data?.mime_type || 'application/octet-stream',
-                data: part.data || part.inline_data?.data,
+                mimeType: part.inline_data?.mime_type || part.mimeType || 'application/octet-stream',
+                data: part.inline_data?.data || part.data,
                 timestamp: new Date().toISOString(),
                 filename: filename
             };
@@ -329,9 +329,7 @@ class GcsArtifactService {
                 inline_data: {
                     mime_type: artifactData.mimeType,
                     data: artifactData.data
-                },
-                mimeType: artifactData.mimeType,
-                data: artifactData.data
+                }
             };
             
         } catch (error) {
@@ -411,8 +409,10 @@ class GcsArtifactService {
             
             // Return in format expected by WhatsApp bot
             return {
-                mimeType: mimeType,
-                data: base64Data
+                inline_data: {
+                    mime_type: mimeType,
+                    data: base64Data
+                }
             };
             
         } catch (error) {
@@ -637,14 +637,12 @@ class MediaHandler {
                 
                 const textContent = this.convertXlsxToText(buffer);
                 
-                // Create text-based part for Gemini
+                // Create text-based part for ADK
                 const part = {
                     inline_data: {
                         mime_type: 'text/plain',
                         data: Buffer.from(textContent).toString('base64')
-                    },
-                    mimeType: 'text/plain',
-                    data: Buffer.from(textContent)
+                    }
                 };
 
                 // Save artifact with converted content
@@ -674,14 +672,12 @@ class MediaHandler {
                 
                 const textContent = await this.convertDocxToText(buffer);
                 
-                // Create text-based part for Gemini
+                // Create text-based part for ADK
                 const part = {
                     inline_data: {
                         mime_type: 'text/plain',
                         data: Buffer.from(textContent).toString('base64')
-                    },
-                    mimeType: 'text/plain',
-                    data: Buffer.from(textContent)
+                    }
                 };
 
                 // Save artifact with converted content
@@ -710,9 +706,7 @@ class MediaHandler {
                 inline_data: {
                     mime_type: mimeType,
                     data: buffer.toString('base64')
-                },
-                mimeType: mimeType,
-                data: buffer
+                }
             };
 
             // Save artifact
@@ -1612,11 +1606,11 @@ class WhatsAppBot {
                             if (artifactName.includes('.png') || artifactName.includes('.jpg') || artifactName.includes('.jpeg') || artifactName.includes('.webp')) {
                                 try {
                                     logger.info(`Fetching image artifact: ${artifactName} for user: ${userId}, session: ${sessionId}`);
-                                    const imageData = await this.artifactService.loadArtifactBySession('app', userId, sessionId, artifactName);
-                                    if (imageData && imageData.data) {
+                                    const imageData = await this.artifactService.loadArtifactBySession(ADK_APP_NAME, userId, sessionId, artifactName);
+                                    if (imageData && imageData.inline_data && imageData.inline_data.data) {
                                         artifactImages.push({
-                                            mimeType: imageData.mimeType || 'image/png',
-                                            data: imageData.data
+                                            mimeType: imageData.inline_data.mime_type || 'image/png',
+                                            data: imageData.inline_data.data
                                         });
                                         logger.info(`Successfully fetched image artifact: ${artifactName}`);
                                     }

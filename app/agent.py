@@ -209,23 +209,91 @@ async def list_user_artifacts(tool_context: ToolContext) -> str:
 
 async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_context: ToolContext) -> str:
     """
-    Loads a specific artifact (media file) and provides analysis context.
-    Use this when you need to analyze a specific file uploaded by the user.
-
+    Load an artifact from storage and prepare it for analysis.
+    For image files, generates a 50-character summary and renames the file using ADK patterns.
+    
     Args:
-        filename (str): The name of the artifact file to load
-        analysis_query (str): What aspect of the file to analyze (e.g., "describe the image", "transcribe audio", "summarize document")
-
+        filename: Name of the artifact file to load
+        analysis_query: Specific analysis request from user
+        tool_context: ADK tool context for artifact operations
+    
     Returns:
-        str: Information about the loaded artifact for analysis
+        Analysis results and rename confirmation for images, or analysis context for other files
     """
     try:
-        # CRITICAL FIX: Session ID mismatch issue
-        # The WhatsApp bot saves artifacts with WhatsApp session IDs (e.g., wa_1760803702930_tjfg41yyy)
-        # but the ADK tool_context.load_artifact() tries to load from the current ADK session
-        # We need to access artifacts across all sessions for this user
+        # Get user information from tool context metadata
+        user_id = tool_context.metadata.get("user_id")
+        if not user_id:
+            # Try alternative ways to get user information
+            for attr in ['userId', 'user', '_user_id', 'current_user']:
+                if hasattr(tool_context, attr):
+                    alt_user = getattr(tool_context, attr)
+                    if alt_user:
+                        user_id = alt_user
+                        break
         
-        # Try to load using the direct GCS approach first since tool_context has session scope limitations
+        if not user_id:
+            return "Error: User ID not found in context"
+        
+        logger.info(f"Loading artifact {filename} for user {user_id}")
+        
+        # First try to load from current session using ADK
+        artifact_data = None
+        try:
+            artifact_part = await tool_context.load_artifact(filename)
+            if artifact_part and hasattr(artifact_part, 'inline_data'):
+                artifact_data = {
+                    'data': artifact_part.inline_data.data,
+                    'mimeType': artifact_part.inline_data.mime_type
+                }
+                logger.info(f"✅ Loaded artifact from current ADK session: {filename}")
+        except Exception as e:
+            logger.debug(f"Artifact not found in current session: {e}")
+        
+        # Fallback: Search across all sessions in GCS
+        if not artifact_data:
+            artifact_data = await _search_artifact_across_sessions(filename, user_id)
+        
+        if not artifact_data:
+            return f"Artifact '{filename}' not found in any session for user {user_id}"
+        
+        mime_type = artifact_data.get('mimeType', 'unknown')
+        data_size = len(base64.b64decode(artifact_data['data'])) if artifact_data.get('data') else 0
+        size_str = f"{data_size / 1024:.1f} KB" if data_size < 1024*1024 else f"{data_size / (1024*1024):.1f} MB"
+        
+        file_type = _get_file_type(mime_type)
+        is_image = mime_type.startswith('image/')
+        
+        if is_image:
+            # Handle image analysis and renaming using ADK patterns
+            return await _analyze_and_rename_image_adk(
+                filename, analysis_query, artifact_data, tool_context, user_id
+            )
+        else:
+            # For non-image files, store in current session for analysis
+            await tool_context.store_artifact(
+                artifact_name=filename,
+                content_type=mime_type,
+                data=base64.b64decode(artifact_data['data'])
+            )
+            
+            return f"""Successfully loaded artifact: {filename}
+File Type: {file_type} ({mime_type})
+File Size: {size_str}
+Analysis Request: {analysis_query}
+
+The {file_type} file has been loaded into the current session and is ready for analysis based on your request: "{analysis_query}".
+
+You can now analyze this file content directly."""
+            
+    except Exception as e:
+        logger.error(f"Error loading artifact {filename}: {e}")
+        return f"Error loading artifact '{filename}': {str(e)}"
+
+
+async def _search_artifact_across_sessions(filename: str, user_id: str) -> dict:
+    """Search for artifact across all user sessions in GCS."""
+    try:
         from google.cloud import storage
         import json
         import base64
@@ -235,169 +303,241 @@ async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_con
         storage_client = storage.Client()
         bucket = storage_client.bucket(artifacts_bucket_name)
         
-        # Get user ID from tool context if available
-        # For WhatsApp users, this will be something like: 6592377976@s.whatsapp.net
-        user_id = getattr(tool_context, 'user_id', None)
-        session_id = getattr(tool_context, 'session_id', '')
+        prefix = f"app/{user_id}/"
+        logger.info(f"Searching for artifact '{filename}' with prefix: {prefix}")
         
-        # Debug logging for troubleshooting - check all tool_context attributes
-        print(f"DEBUG load_artifact: Tool context type: {type(tool_context)}")
-        print(f"DEBUG load_artifact: Tool context attributes: {dir(tool_context)}")
-        print(f"DEBUG load_artifact: Tool context user_id: {user_id}")
-        print(f"DEBUG load_artifact: Tool context session_id: {session_id}")
-        
-        # Try alternative ways to get user information from tool context
-        if not user_id:
-            # Check if there's a different attribute name
-            for attr in ['userId', 'user', '_user_id', 'current_user']:
-                if hasattr(tool_context, attr):
-                    alt_user = getattr(tool_context, attr)
-                    print(f"DEBUG load_artifact: Found alternative user attribute '{attr}': {alt_user}")
-                    if alt_user:
-                        user_id = alt_user
-                        break
-        
-        if not user_id:
-            # Always search across all users if we can't determine the specific user
-            # This is more reliable than trying to guess the user ID
-            user_id = '*'  # Wildcard to search all users
-            print(f"DEBUG load_artifact: No user_id found, using wildcard search")
-        
-        # Search for the artifact across all sessions for this user
-        # Path pattern: app/[user_id]/[session_id]/[filename]/[version]
-        if user_id == '*':
-            # Search across all users if we can't determine the specific user
-            prefix = "app/"
-            print(f"DEBUG: Searching for artifact '{filename}' across all users with prefix '{prefix}'")
-        else:
-            prefix = f"app/{user_id}/"
-            print(f"DEBUG: Searching for artifact '{filename}' for user '{user_id}' with prefix '{prefix}'")
-        
-        # List all blobs with this prefix to find sessions containing our artifact
-        blobs = bucket.list_blobs(prefix=prefix)
-        artifact_found = None
-        found_path = None
-        
-        for blob in blobs:
-            # Extract the path components
+        for blob in bucket.list_blobs(prefix=prefix):
             path_parts = blob.name.split('/')
-            if len(path_parts) >= 5:  # app/user_id/session_id/filename/version
-                found_filename = path_parts[3]
-                version = path_parts[4]
+            if len(path_parts) >= 4 and path_parts[3] == filename:
+                data = blob.download_as_bytes()
                 
-                # Check if this blob matches our target filename (with or without version suffix)
-                if (found_filename == filename or 
-                    found_filename.startswith(filename.split(' v')[0]) or
-                    filename.startswith(found_filename)):
-                    
-                    print(f"DEBUG: Found potential match: {blob.name}")
-                    
-                    # Try to download and parse this artifact
-                    try:
-                        data = blob.download_as_bytes()
-                        
-                        # Check if it's JSON (our artifact format) or raw data
-                        try:
-                            artifact_data = json.loads(data.decode('utf-8'))
-                            if 'data' in artifact_data and 'mimeType' in artifact_data:
-                                # This is our JSON-wrapped artifact format
-                                artifact_found = {
-                                    'data': artifact_data['data'],
-                                    'mimeType': artifact_data['mimeType'],
-                                    'inline_data': {
-                                        'mime_type': artifact_data['mimeType'],
-                                        'data': artifact_data['data']
-                                    }
-                                }
-                                found_path = blob.name
-                                print(f"DEBUG: ✅ Successfully loaded artifact from: {found_path}")
-                                break
-                        except (json.JSONDecodeError, UnicodeDecodeError):
-                            # This might be raw binary data (ADK format)
-                            artifact_found = {
-                                'data': base64.b64encode(data).decode('utf-8'),
-                                'mimeType': 'application/octet-stream',  # Default, will be updated
-                                'inline_data': {
-                                    'mime_type': 'application/octet-stream',
-                                    'data': base64.b64encode(data).decode('utf-8')
-                                }
-                            }
-                            found_path = blob.name
-                            print(f"DEBUG: ✅ Successfully loaded raw artifact from: {found_path}")
-                            break
-                            
-                    except Exception as blob_error:
-                        print(f"DEBUG: Failed to load blob {blob.name}: {blob_error}")
-                        continue
+                try:
+                    # Try JSON format first (from WhatsApp bot)
+                    artifact_data = json.loads(data.decode('utf-8'))
+                    if 'data' in artifact_data and 'mimeType' in artifact_data:
+                        logger.info(f"✅ Found artifact in cross-session storage: {blob.name}")
+                        return artifact_data
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    # Raw binary format fallback
+                    logger.info(f"✅ Found raw artifact in storage: {blob.name}")
+                    return {
+                        'data': base64.b64encode(data).decode('utf-8'),
+                        'mimeType': 'application/octet-stream'
+                    }
         
-        if not artifact_found:
-            # Fallback: try the original ADK load_artifact method
-            print(f"DEBUG: Direct GCS search failed, trying ADK tool_context.load_artifact()")
-            try:
-                artifact_part = await tool_context.load_artifact(filename)
-                if artifact_part:
-                    artifact_found = artifact_part
-                    found_path = f"ADK_context:{filename}"
-                    print(f"DEBUG: ✅ Loaded via tool_context: {found_path}")
-            except Exception as context_error:
-                print(f"DEBUG: tool_context.load_artifact also failed: {context_error}")
-        
-        if not artifact_found:
-            return f"Artifact '{filename}' not found in any session for user '{user_id}'. Searched prefix: '{prefix}'"
-        
-        # Extract artifact information
-        mime_type = "unknown"
-        data_size = 0
-        
-        if hasattr(artifact_found, 'inline_data') and artifact_found.inline_data:
-            mime_type = artifact_found.inline_data.mime_type or "unknown"
-            data_size = len(artifact_found.inline_data.data) if artifact_found.inline_data.data else 0
-        elif hasattr(artifact_found, 'mimeType'):
-            mime_type = artifact_found.mimeType or "unknown"
-            data_size = len(artifact_found.data) if hasattr(artifact_found, 'data') and artifact_found.data else 0
-        elif isinstance(artifact_found, dict):
-            # Handle our dictionary format
-            mime_type = artifact_found.get('mimeType', 'unknown')
-            data_size = len(artifact_found.get('data', '')) if artifact_found.get('data') else 0
-        
-        # Format file size
-        if data_size > 1024 * 1024:
-            size_str = f"{data_size / (1024 * 1024):.1f} MB"
-        elif data_size > 1024:
-            size_str = f"{data_size / 1024:.1f} KB"
-        else:
-            size_str = f"{data_size} bytes"
-        
-        # Determine file type category
-        file_type = "unknown"
-        if mime_type.startswith("image/"):
-            file_type = "image"
-        elif mime_type.startswith("audio/"):
-            file_type = "audio"
-        elif mime_type.startswith("video/"):
-            file_type = "video"
-        elif mime_type.startswith("application/pdf"):
-            file_type = "PDF document"
-        elif mime_type.startswith("text/"):
-            file_type = "text document"
-        elif "document" in mime_type:
-            file_type = "document"
-        
-        analysis_context = f"""Successfully loaded artifact: {filename}
-File Type: {file_type} ({mime_type})
-File Size: {size_str}
-Analysis Request: {analysis_query}
-
-The artifact has been loaded and is ready for analysis. As a multimodal AI, I can now analyze this {file_type} file based on your request: "{analysis_query}".
-
-Note: The file content is available in the conversation context for direct analysis."""
-        
-        return analysis_context
-        
-    except ValueError as e:
-        return f"Error loading artifact '{filename}': {e}. Is the artifact service configured?"
+        return None
     except Exception as e:
-        return f"An unexpected error occurred while loading '{filename}': {e}"
+        logger.error(f"Error searching artifact across sessions: {e}")
+        return None
+
+
+async def _analyze_and_rename_image_adk(
+    original_filename: str, 
+    analysis_query: str, 
+    artifact_data: dict, 
+    tool_context: ToolContext,
+    user_id: str
+) -> str:
+    """
+    Analyze an image using ADK multimodal capabilities and rename with smart filename.
+    """
+    try:
+        mime_type = artifact_data.get('mimeType', 'image/jpeg')
+        data_size = len(base64.b64decode(artifact_data['data']))
+        size_str = f"{data_size / 1024:.1f} KB" if data_size < 1024*1024 else f"{data_size / (1024*1024):.1f} MB"
+        
+        # Store the image in current session for analysis
+        await tool_context.store_artifact(
+            artifact_name=original_filename,
+            content_type=mime_type,
+            data=base64.b64decode(artifact_data['data'])
+        )
+        
+        # Create a multimodal content for filename generation
+        summary_prompt = f"""Analyze this image and create a descriptive filename summary.
+
+Requirements:
+- Maximum 45 characters (excluding file extension)
+- Describe the main content/subject clearly
+- Use underscores instead of spaces
+- Focus on key visual elements
+- Make it searchable and meaningful
+
+Context: {analysis_query}
+
+Respond with ONLY the filename summary text, no quotes or extra formatting."""
+        
+        # Send message with image context for summary generation
+        from google.genai import types
+        summary_content = types.Content(
+            role='user',
+            parts=[types.Part(text=summary_prompt)]
+        )
+        
+        # The image should be automatically included from the stored artifact
+        summary_response = await tool_context.send_message(summary_content)
+        
+        # Extract and clean the summary
+        raw_summary = str(summary_response).strip().strip('"\'')
+        cleaned_summary = _clean_filename_text(raw_summary, 45)
+        
+        # Generate new filename
+        new_filename = _generate_smart_filename(cleaned_summary, mime_type)
+        
+        # Store the renamed artifact in both current session and cross-session storage
+        await _store_renamed_artifact(
+            new_filename, original_filename, artifact_data, 
+            analysis_query, cleaned_summary, tool_context, user_id
+        )
+        
+        # Now perform detailed analysis with the properly named artifact
+        analysis_content = types.Content(
+            role='user',
+            parts=[types.Part(text=f"""Now provide a comprehensive analysis of this image based on: "{analysis_query}"
+
+Please analyze what you see and provide detailed insights.""")]
+        )
+        
+        analysis_response = await tool_context.send_message(analysis_content)
+        
+        return f"""✅ **Image Analysis & Auto-Rename Complete!**
+
+📁 **Filename Updated**: 
+   • From: `{original_filename}`
+   • To: `{new_filename}`
+
+📊 **File Details**: {mime_type} • {size_str}
+
+🔍 **Analysis Results**:
+{analysis_response}
+
+Your image has been automatically renamed with a descriptive filename and is now available as `{new_filename}` for future reference!"""
+        
+    except Exception as e:
+        logger.error(f"Error analyzing and renaming image: {e}")
+        return f"Error analyzing image: {str(e)}\n\nProceeding with original filename: {original_filename}"
+
+
+async def _store_renamed_artifact(
+    new_filename: str, 
+    original_filename: str, 
+    artifact_data: dict,
+    analysis_query: str,
+    summary: str,
+    tool_context: ToolContext,
+    user_id: str
+):
+    """Store renamed artifact in both ADK session and cross-session storage."""
+    try:
+        mime_type = artifact_data.get('mimeType')
+        data_bytes = base64.b64decode(artifact_data['data'])
+        
+        # Store in current ADK session
+        await tool_context.store_artifact(
+            artifact_name=new_filename,
+            content_type=mime_type,
+            data=data_bytes
+        )
+        
+        # Store in cross-session GCS storage
+        from google.cloud import storage
+        import json
+        import time
+        
+        storage_client = storage.Client()
+        artifacts_bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
+        bucket = storage_client.bucket(artifacts_bucket_name)
+        session_id = tool_context.metadata.get("session_id", "default_session")
+        
+        new_blob_path = f"app/{user_id}/{session_id}/{new_filename}/v1"
+        new_blob = bucket.blob(new_blob_path)
+        
+        # Store with metadata
+        artifact_with_metadata = {
+            'data': artifact_data['data'],
+            'mimeType': mime_type,
+            'filename': new_filename,
+            'originalFilename': original_filename,
+            'analysis': analysis_query,
+            'summary': summary,
+            'timestamp': time.time()
+        }
+        
+        new_blob.upload_from_string(
+            json.dumps(artifact_with_metadata),
+            content_type='application/json'
+        )
+        
+        logger.info(f"Stored renamed artifact: {original_filename} -> {new_filename}")
+        
+    except Exception as e:
+        logger.error(f"Error storing renamed artifact: {e}")
+
+
+def _clean_filename_text(text: str, max_length: int) -> str:
+    """Clean text to be suitable for filename."""
+    import re
+    import time
+    
+    # Remove quotes and extra whitespace
+    text = text.strip().strip('"\'')
+    
+    # Convert to lowercase for consistency
+    text = text.lower()
+    
+    # Replace spaces and special chars with underscores
+    text = re.sub(r'[^\w\-]', '_', text)
+    
+    # Remove multiple consecutive underscores
+    text = re.sub(r'_+', '_', text)
+    
+    # Remove leading/trailing underscores
+    text = text.strip('_')
+    
+    # Truncate to max length
+    if len(text) > max_length:
+        text = text[:max_length].rstrip('_')
+    
+    # Ensure minimum length
+    if len(text) < 3:
+        text = f"content_{int(time.time())}"
+    
+    return text
+
+
+def _generate_smart_filename(summary: str, mime_type: str) -> str:
+    """Generate smart filename from summary and mime type."""
+    # Get appropriate extension
+    ext_map = {
+        'image/jpeg': '.jpg',
+        'image/png': '.png',
+        'image/gif': '.gif',
+        'image/webp': '.webp',
+        'image/bmp': '.bmp'
+    }
+    extension = ext_map.get(mime_type, '.jpg')
+    
+    # Create filename
+    if len(summary) < 5:
+        import time
+        summary = f"analyzed_image_{int(time.time())}"
+    
+    return f"{summary}{extension}"
+
+
+def _get_file_type(mime_type: str) -> str:
+    """Get human-readable file type from MIME type."""
+    if mime_type.startswith('image/'):
+        return "image"
+    elif mime_type.startswith('application/'):
+        return "document"
+    elif mime_type.startswith('audio/'):
+        return "audio"
+    elif mime_type.startswith('video/'):
+        return "video"
+    else:
+        return "file"
+
 
 
 async def save_analysis_result(filename: str, analysis_content: str, tool_context: ToolContext) -> str:
@@ -715,14 +855,24 @@ The webhook-based system (register_video_webhook) is still available for compati
 
 **Multimodal Analysis Capabilities:**
 - **Images**: Describe, analyze content, extract text, identify objects, analyze compositions
+  - **SMART AUTO-RENAMING**: When analyzing images, automatically generates descriptive 50-character filenames
+  - **Enhanced Organization**: Replaces random filenames with meaningful descriptions
 - **Audio**: Transcribe speech, identify sounds, analyze music (when audio data is available)
 - **Videos**: Analyze visual content, describe scenes, extract key frames
 - **Documents**: Read, summarize, extract information from PDFs and text files
 
+**🎯 Smart Image Analysis Workflow:**
+When users upload images for analysis, you automatically:
+1. **Load & Analyze**: Use `load_and_analyze_artifact` to access the image
+2. **AI-Powered Naming**: Generate a descriptive 50-character summary of the image content
+3. **Auto-Rename**: Replace random filenames (e.g., `media_uuid.jpg`) with smart names (e.g., `quarterly_sales_chart_with_growth_trends.jpg`)
+4. **Comprehensive Analysis**: Provide detailed insights about the image content
+5. **Persistent Storage**: Store both original and renamed versions with full metadata
+
 **Working with Uploaded Images for fal.ai:**
 When users upload an image and want to use it with fal.ai models (especially for image-to-video):
 1. First, use `list_user_artifacts` to see available files
-2. Use `load_and_analyze_artifact` to analyze the image if needed
+2. Use `load_and_analyze_artifact` to analyze the image (this automatically renames images with smart descriptions)
 3. **IMPORTANT**: Use `make_artifact_public` to create a public GCS URL for the image
 4. Provide this public URL to the fal.ai agent for processing
 5. The fal.ai agent can then use this URL with models like Seedance for image-to-video generation
@@ -737,7 +887,9 @@ When users provide Google Cloud Storage URLs (format: storage.googleapis.com wit
 **When users upload media files through WhatsApp:**
 1. First use `list_user_artifacts` to see what files are available
 2. Use `load_and_analyze_artifact` to load specific files for analysis
-3. Provide detailed analysis using your multimodal capabilities
+   - **For images**: Automatically generates smart filename and provides comprehensive analysis
+   - **For other files**: Provides content analysis based on file type
+3. **Explain the renaming**: Show users the before/after filename transformation
 4. If using with fal.ai, use `make_artifact_public` to create public GCS URLs
 5. Optionally save analysis results using `save_analysis_result`
 
