@@ -83,6 +83,12 @@ async def lifespan(app: FastAPI):
         runner = await initialize_runner()
         app.state.custom_adk_runner = runner
         print("✅ Custom ADK Runner initialized and stored")
+        
+        # Initialize polling manager with the runner
+        from app.polling_manager import set_polling_manager_runner
+        set_polling_manager_runner(runner)
+        print("✅ Polling manager configured with runner")
+        
     except Exception as e:
         print(f"❌ Error initializing custom ADK runner: {e}")
     
