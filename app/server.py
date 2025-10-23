@@ -14,11 +14,13 @@
 
 import os
 import asyncio
+import json
 from typing import Dict, Any
 from contextlib import asynccontextmanager
 
 import google.auth
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, Request
+from starlette.middleware.base import BaseHTTPMiddleware
 from google.adk.cli.fast_api import get_fast_api_app
 from google.cloud import logging as google_cloud_logging
 from opentelemetry import trace
@@ -28,7 +30,7 @@ from vertexai import agent_engines
 from app.utils.gcs import create_bucket_if_not_exists
 from app.utils.tracing import CloudTraceLoggingSpanExporter
 from app.utils.typing import Feedback
-from app.long_running_manager import poll_and_continue_operation, operation_manager
+from app.polling_manager import get_polling_manager
 
 # Deployment test - October 3, 2025 08:40 UTC
 _, project_id = google.auth.default()
@@ -71,29 +73,66 @@ AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # session_service_uri = f"agentengine://{agent_engine.resource_name}"
 
 
+class SessionContextMiddleware(BaseHTTPMiddleware):
+    """
+    Middleware to capture session_id from ADK requests and store it in context.
+    This allows long-running tools to access the session_id.
+    """
+    async def dispatch(self, request: Request, call_next):
+        # Only process /run requests
+        if request.url.path == "/run":
+            try:
+                # Read request body
+                body = await request.body()
+                body_json = json.loads(body)
+                
+                # Extract session_id
+                session_id = body_json.get("sessionId")
+                user_id = body_json.get("userId")
+                
+                if session_id:
+                    # Store in context variable
+                    from app.adk_runner import current_session_context
+                    current_session_context.set({
+                        "session_id": session_id,
+                        "user_id": user_id or "unknown"
+                    })
+                    print(f"🔍 Middleware captured session_id: {session_id}")
+                
+                # Reconstruct request with body
+                async def receive():
+                    return {"type": "http.request", "body": body}
+                
+                request._receive = receive
+                
+            except Exception as e:
+                print(f"⚠️ Error in session context middleware: {e}")
+        
+        response = await call_next(request)
+        return response
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events for the FastAPI app."""
     # Startup
     print("🚀 FastAPI server starting up...")
     
-    # Initialize our custom ADK runner
+    # Configure polling manager with app reference so it can get the runner dynamically
     try:
-        from app.adk_runner import initialize_runner
-        runner = await initialize_runner()
-        app.state.custom_adk_runner = runner
-        print("✅ Custom ADK Runner initialized and stored")
+        from app.polling_manager import get_polling_manager
+        polling_mgr = get_polling_manager()
         
-        # Initialize polling manager with the runner
-        from app.polling_manager import set_polling_manager_runner
-        set_polling_manager_runner(runner)
-        print("✅ Polling manager configured with runner")
+        # Store a reference to the app in the polling manager so it can get the runner dynamically
+        polling_mgr.app = app
+        print("✅ Polling manager configured with app reference")
         
     except Exception as e:
-        print(f"❌ Error initializing custom ADK runner: {e}")
+        print(f"❌ Error configuring polling manager: {e}")
     
     yield
-    # Shutdown (if needed)
+    
+    # Shutdown
     print("🛑 FastAPI server shutting down...")
 
 
@@ -119,6 +158,10 @@ app: FastAPI = get_fast_api_app(
 )
 app.title = "my-agentic-rag"
 app.description = "API for interacting with the Agent my-agentic-rag"
+
+# Add session context middleware to capture session_id from requests
+app.add_middleware(SessionContextMiddleware)
+print("✅ Session context middleware added to capture session_id from /run requests")
 
 
 @app.get("/custom-runner/info")
@@ -187,6 +230,32 @@ def health_check() -> dict[str, str]:
         "message": "Webhook system deployed - video generation callbacks enabled!", 
         "timestamp": datetime.datetime.now().isoformat(),
         "version": "v1.3"
+    }
+
+@app.get("/polling/status")
+def polling_status() -> dict:
+    """Get current polling manager status and pending operations.
+    
+    Returns:
+        Current polling status and pending operations
+    """
+    polling_manager = get_polling_manager()
+    pending_ops = {}
+    
+    for fal_id, operation in polling_manager.pending_operations.items():
+        pending_ops[fal_id] = {
+            "function_call_id": operation.function_call_id,
+            "session_id": operation.session_id,
+            "user_id": operation.user_id,
+            "operation_type": operation.operation_type,
+            "prompt": operation.prompt[:100] + "..." if len(operation.prompt) > 100 else operation.prompt
+        }
+    
+    return {
+        "status": "active",
+        "pending_operations_count": len(pending_ops),
+        "pending_operations": pending_ops,
+        "polling_active": bool(polling_manager.pending_operations)
     }
 
 @app.get("/version")
@@ -278,8 +347,22 @@ async def start_long_running_polling(
 async def get_operation_status(operation_id: str) -> Dict[str, Any]:
     """Get the current status of a long-running operation."""
     try:
-        status = await operation_manager.poll_operation(operation_id)
-        return status
+        polling_manager = get_polling_manager()
+        # For now, just return the pending operations info
+        if operation_id in polling_manager.pending_operations:
+            operation = polling_manager.pending_operations[operation_id]
+            return {
+                "operation_id": operation_id,
+                "status": "IN_PROGRESS",
+                "model_name": operation.model_name,
+                "operation_type": operation.operation_type
+            }
+        else:
+            return {
+                "operation_id": operation_id,
+                "status": "NOT_FOUND",
+                "message": "Operation not found in pending operations"
+            }
     except Exception as e:
         logger.error(f"❌ Error getting operation status: {e}")
         return {
@@ -304,8 +387,24 @@ async def poll_operation_background(
         # TODO: Integrate with actual ADK agent runner for completion
         max_attempts = 120  # 10 minutes
         
+        polling_manager = get_polling_manager()
+        
         for attempt in range(max_attempts):
-            status = await operation_manager.poll_operation(operation_id)
+            # Check if operation is still in pending operations
+            if operation_id in polling_manager.pending_operations:
+                operation = polling_manager.pending_operations[operation_id]
+                status = {
+                    "operation_id": operation_id,
+                    "status": "IN_PROGRESS",
+                    "model_name": operation.model_name,
+                    "operation_type": operation.operation_type
+                }
+            else:
+                status = {
+                    "operation_id": operation_id,
+                    "status": "COMPLETED",
+                    "message": "Operation completed and removed from pending list"
+                }
             
             if status["status"] in ["COMPLETED", "FAILED"]:
                 logger.info(f"✅ Operation {operation_id} completed with status: {status['status']}")

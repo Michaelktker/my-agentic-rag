@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Dict, Any, Optional
 import google.auth
@@ -24,6 +25,9 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from app.agent import root_agent
+
+# Context variable to store current session info during execution
+current_session_context: ContextVar[Optional[Dict[str, str]]] = ContextVar('current_session_context', default=None)
 
 
 class CustomADKRunner:

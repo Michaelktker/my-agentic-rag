@@ -963,10 +963,11 @@ async def generate_image_long_running(
                     function_call_id = None
                     if tool_context:
                         try:
+                            logger.info(f"🔍 DEBUG: Tool context type: {type(tool_context)}")
+                            logger.info(f"🔍 DEBUG: Tool context attributes: {[attr for attr in dir(tool_context) if not attr.startswith('_')]}")
                             if hasattr(tool_context, 'function_call_id'):
-                                function_call_id = tool_context.function_call_id()
-                            elif hasattr(tool_context, 'function_call_id'):
                                 function_call_id = tool_context.function_call_id
+                                logger.info(f"🔍 DEBUG: Found function_call_id: {function_call_id}")
                         except Exception as e:
                             logger.warning(f"⚠️ Error getting function call ID: {e}")
                     
@@ -975,9 +976,44 @@ async def generate_image_long_running(
                         function_call_id = f"fallback_{fal_request_id}"
                     
                     # Get session_id from tool context
-                    session_id = 'current_session'  # default fallback
+                    session_id = None
                     if tool_context:
-                        session_id = getattr(tool_context, 'session_id', 'current_session')
+                        session_id = getattr(tool_context, 'session_id', None)
+                        if session_id and session_id != 'current_session':
+                            logger.info(f"🔍 DEBUG: Found session_id from tool_context: {session_id}")
+                    
+                    # Try to get from context variable if not found
+                    if not session_id or session_id == 'current_session':
+                        try:
+                            from app.adk_runner import current_session_context
+                            ctx = current_session_context.get()
+                            if ctx and 'session_id' in ctx:
+                                session_id = ctx['session_id']
+                                logger.info(f"🔍 DEBUG: Found session_id from context var: {session_id}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Could not get session from context: {e}")
+                    
+                    # Last resort: Get the most recent session from polling manager/runner
+                    if not session_id or session_id == 'current_session':
+                        try:
+                            # Try to get runner from polling manager first (already imported at top)
+                            polling_mgr = get_polling_manager()
+                            if polling_mgr and hasattr(polling_mgr, 'runner'):
+                                runner = polling_mgr.runner
+                                if runner and hasattr(runner, 'active_sessions'):
+                                    # Get the most recently created session
+                                    sessions = list(runner.active_sessions.keys())
+                                    if sessions:
+                                        session_id = sessions[-1]  # Use most recent session
+                                        logger.info(f"🔍 DEBUG: Using most recent session from polling manager runner: {session_id}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Could not get session from runner: {e}")
+                    
+                    # Final fallback
+                    if not session_id:
+                        session_id = 'current_session'
+                    
+                    logger.info(f"📌 Using session_id: {session_id}")
                     
                     # Create pending operation for polling manager
                     pending_operation = PendingOperation(

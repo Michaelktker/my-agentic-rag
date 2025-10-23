@@ -32,10 +32,22 @@ class PollingManager:
     def __init__(self, runner=None):
         self.pending_operations: Dict[str, PendingOperation] = {}
         self.runner = runner
+        self.app = None  # Will be set by lifespan to access ADK runner dynamically
         self.fal_api_key = os.getenv("FAL_KEY")
         self.polling_interval = 3  # Check every 3 seconds
         self.max_retries = 5
         self._polling_task = None
+        
+    def get_adk_runner(self):
+        """Get the ADK runner - try from app state first, then fallback to self.runner"""
+        # Try to get the ADK SDK's runner from the app state
+        if self.app and hasattr(self.app.state, 'agentic_app'):
+            agentic_app = self.app.state.agentic_app
+            if hasattr(agentic_app, 'runner'):
+                return agentic_app.runner
+        
+        # Fallback to the runner passed during initialization
+        return self.runner
         
     def add_operation(self, operation: PendingOperation):
         """Add a new operation to track"""
@@ -194,6 +206,12 @@ class PollingManager:
                         else:
                             logger.warning(f"⚠️ Unknown status: {status_result.get('status')}")
                         
+                    elif response.status == 202:
+                        # 202 means the request is still being processed - this is normal!
+                        status_result = await response.json()
+                        logger.info(f"⏳ Request still in progress (HTTP 202): {status_result.get('status', 'IN_PROGRESS')}")
+                        # Continue polling - this is not an error!
+                        
                     elif response.status == 400:
                         error_text = await response.text()
                         logger.info(f"📋 Status check returned 400 (still processing): {error_text}")
@@ -273,7 +291,10 @@ class PollingManager:
     async def _send_to_runner(self, operation: PendingOperation, content: Content):
         """Send content to the ADK runner"""
         try:
-            if not self.runner:
+            # Get the ADK runner dynamically
+            actual_runner = self.get_adk_runner()
+            
+            if not actual_runner:
                 logger.warning("⚠️ No runner available - logging completion instead")
                 logger.info(f"🎉 OPERATION COMPLETED: {operation.fal_request_id}")
                 logger.info(f"📋 Function: {operation.operation_type} generation")
@@ -290,21 +311,71 @@ class PollingManager:
                                     logger.info(f"🎬 Video URL: {result['video_url']}")
                 return
             
-            # Use the underlying runner if it's a CustomADKRunner
-            actual_runner = self.runner
-            if hasattr(self.runner, 'runner'):
-                actual_runner = self.runner.runner
+            # If we got a CustomADKRunner wrapper, unwrap it
+            if hasattr(actual_runner, 'runner'):
+                actual_runner = actual_runner.runner
             
-            # Use the runner to send the response back
-            events = actual_runner.run_async(
-                user_id=operation.user_id,
-                session_id=operation.session_id,
-                new_message=content
-            )
+            logger.info(f"📤 Attempting to send result to runner for session: {operation.session_id}")
+            logger.info(f"🔍 Using runner type: {type(actual_runner).__name__}")
             
-            # Process events (this triggers the agent to continue)
-            async for event in events:
-                logger.info(f"📨 Processed event from runner: {event.author}")
+            # Use the runner to send the response back using proper ADK pattern
+            try:
+                # ADK pattern: Create a message with the function response
+                # The content should contain the function_call_id and response
+                logger.info(f"🔧 Resuming ADK session with function_call_id: {operation.function_call_id}")
+                
+                events = actual_runner.run_async(
+                    user_id=operation.user_id,
+                    session_id=operation.session_id,
+                    new_message=content  # This should contain the function response with function_call_id
+                )
+                
+                # Process events (this triggers the agent to continue)
+                event_count = 0
+                async for event in events:
+                    event_count += 1
+                    logger.info(f"📨 Processed event {event_count} from runner: {event.author}")
+                    
+                logger.info(f"✅ Successfully resumed session with {event_count} events processed")
+                    
+            except Exception as session_error:
+                logger.error(f"❌ Session error - trying fallback approach: {session_error}")
+                
+                # DEBUG: Log what we're trying to send
+                logger.info(f"🔍 DEBUG: Content type: {type(content)}")
+                logger.info(f"🔍 DEBUG: Content has parts: {hasattr(content, 'parts')}")
+                if hasattr(content, 'parts'):
+                    logger.info(f"🔍 DEBUG: Parts count: {len(content.parts) if content.parts else 0}")
+                
+                # Fallback: Log the completion details with image URL for user to see
+                logger.info(f"🎉 OPERATION COMPLETED (fallback due to session error): {operation.fal_request_id}")
+                logger.info(f"📋 Function: {operation.operation_type} generation")
+                logger.info(f"💬 Prompt: {operation.prompt}")
+                
+                # Extract and log the result URL prominently
+                if hasattr(content, 'parts') and content.parts:
+                    for part in content.parts:
+                        logger.info(f"🔍 DEBUG: Processing part: {type(part)}")
+                        if hasattr(part, 'function_response') and part.function_response:
+                            logger.info(f"🔍 DEBUG: Found function response!")
+                            response_data = part.function_response.response
+                            logger.info(f"🔍 DEBUG: Response data keys: {list(response_data.keys()) if isinstance(response_data, dict) else type(response_data)}")
+                            if 'result' in response_data:
+                                result = response_data['result']
+                                logger.info(f"🔍 DEBUG: Result keys: {list(result.keys()) if isinstance(result, dict) else type(result)}")
+                                if 'image_url' in result:
+                                    logger.info(f"🖼️ *** IMAGE GENERATED SUCCESSFULLY *** URL: {result['image_url']}")
+                                    logger.info(f"📏 Dimensions: {result.get('width', 'unknown')}x{result.get('height', 'unknown')}")
+                                elif 'video_url' in result:
+                                    logger.info(f"🎬 *** VIDEO GENERATED SUCCESSFULLY *** URL: {result['video_url']}")
+                                    logger.info(f"📏 Dimensions: {result.get('width', 'unknown')}x{result.get('height', 'unknown')}")
+                                    logger.info(f"⏱️ Duration: {result.get('duration', 'unknown')} seconds")
+                            else:
+                                logger.warning(f"⚠️ No 'result' key in response data")
+                        else:
+                            logger.info(f"🔍 DEBUG: Part has no function_response: {hasattr(part, 'function_response')}")
+                else:
+                    logger.warning(f"⚠️ Content has no parts or parts is empty")
                 
         except Exception as e:
             logger.error(f"❌ Error sending to runner: {e}")
