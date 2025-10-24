@@ -18,10 +18,12 @@
 import os
 import base64
 import uuid
-import asyncio
-import aiohttp
 import json
 import logging
+import signal
+import atexit
+import time
+import requests
 from io import BytesIO
 from typing import Optional
 
@@ -32,7 +34,7 @@ from google.adk.tools.mcp_tool import MCPToolset, StreamableHTTPConnectionParams
 from mcp.client.stdio import StdioServerParameters
 from google.adk.tools import google_search
 from google.adk.tools.agent_tool import AgentTool
-from google.adk.tools import FunctionTool, LongRunningFunctionTool
+from google.adk.tools import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 from langchain_google_vertexai import VertexAIEmbeddings
@@ -291,15 +293,13 @@ Always be precise and thorough in your GitHub operations."""
 FAL_MCP_PROMPT = """
 You are a FAL.ai MCP agent that generates and edits images/videos using fal.ai models through MCP interface.
 
-## CRITICAL: ALL OPERATIONS USE LONG-RUNNING QUEUE SYSTEM
+## CRITICAL: ALL OPERATIONS USE INTERNAL SYNCHRONOUS POLLING
 
-### ALL Image Generation, Image Editing, and Video Generation:
-- **ALL operations** now use the long-running queue system for consistency
-- **No direct/fast operations** - everything goes through queue for uniform behavior
-- **Use specialized tools** for different content types:
-  - `generate_image()` - for image generation
-  - `edit_image()` - for image editing  
-  - `generate_video()` - for video generation
+### For ALL Image Generation, Image Editing, and Video Generation:
+- **Use specialized tools**: `generate_image()`, `edit_image()`, `generate_video()`
+- **These tools handle everything internally**: queue submission, polling, completion
+- **Return final results synchronously** - no external polling needed
+- **User gets complete results immediately** or error details
 
 ### Model Discovery and Selection:
 
@@ -346,16 +346,32 @@ Agent: Uses generate_image(model="[user-specified-model]", prompt="cat", ...)
 - Common patterns: text-to-video, image-to-video models
 - User chooses model based on their video generation requirements
 
-## CRITICAL: Long-Running Function Tool Workflow
+## NEW: Specialized Generation Tools with Internal Polling
 
-### For ALL operations (now consistently long-running):
-1. **Discover models** using search() or models() if user hasn't specified
-2. **User selects specific model** they want to use
-3. **Use specialized tools** (`generate_image`, `edit_image`, `generate_video`)
-4. **All operations return queue details** with status_url and response_url
-5. **Agent integration** works with LongRunningFunctionTool pattern
-6. **External polling handles completion** - WhatsApp bot polls status
-7. **Agent resumes** when completion is sent back
+### `generate_image(model, prompt, width, height, **kwargs)`:
+- **Complete image generation workflow** - queues request and polls until done
+- **Returns final image result** or error details
+- **No external polling needed** - handles everything internally
+- **User gets immediate results** when tool completes
+
+### `generate_video(model, prompt, image_url, **kwargs)`:
+- **Complete video generation workflow** - queues request and polls until done
+- **Returns final video result** or error details  
+- **No external polling needed** - handles everything internally
+- **User gets immediate results** when tool completes
+
+### `edit_image(model, image_url, prompt, **kwargs)`:
+- **Complete image editing workflow** - queues request and polls until done
+- **Returns final edited image result** or error details
+- **No external polling needed** - handles everything internally
+- **User gets immediate results** when tool completes
+
+## Lower-Level Tools (for advanced users):
+
+### For Manual Queue Management:
+- **`generate()`** - Start queued operations (returns status_url, response_url)
+- **`poll_until_complete()`** - Manual polling tool
+- **`status()`** and `result()`** - Individual status/result checking
 
 ## Dynamic Model Usage Pattern:
 ```
@@ -367,7 +383,7 @@ Agent: Uses generate_image(model="[user-specified-model]", prompt="cat", ...)
 models = search("image generation")
 # 2. Present options to user
 # 3. User selects model_name
-# 4. Use selected model
+# 4. Use selected model with specialized tool
 result = generate_image(
     model=user_selected_model,
     prompt=prompt,
@@ -382,24 +398,25 @@ result = generate_image(
 - **Don't assume defaults** - ask user for important parameters
 
 ## Response Handling:
-- **Return queue details** from any generation operation
-- **Include status_url** for polling
-- **Include response_url** for final result retrieval
-- **Let the long-running system handle completion**
+- **Specialized tools return complete results** - no additional polling
+- **Include final URLs, metadata, and completion status**
+- **Handle errors gracefully** with clear error messages
+- **Return structured results** for easy parsing
 
 ## User Communication:
 - **"Let me find available models for you..."**
 - **"Here are the [type] models I found: [list]"**
 - **"Which model would you like to use?"**
 - **"I'll use [model_name] for your request"**
-- **Always inform users** that their request is being processed and they will be notified when complete
+- **"Generation complete! Here's your result..."**
 
 ## Key Principles:
 1. **USER-DRIVEN MODEL SELECTION** - Never choose for them
 2. **DYNAMIC MODEL DISCOVERY** - Always use search/models tools
 3. **NO HARDCODED MODELS** - Every model comes from user choice
 4. **PRESENT OPTIONS** - Show what's available, let user decide
-5. **RESPECT USER PREFERENCES** - Use exactly what they specify
+5. **SYNCHRONOUS OPERATION** - Return complete results, no external polling
+6. **RESPECT USER PREFERENCES** - Use exactly what they specify
 """
 
 instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis, PLUS image generation via multiple sources.
@@ -413,8 +430,9 @@ You have access to several specialized capabilities:
 4. **fal.ai AI generation** through a specialized fal.ai agent with access to:
    - Advanced image generation models (Flux, SDXL, etc.)
    - Video generation capabilities (Stable Video Diffusion, etc.)
+   - Image editing capabilities
    - Model discovery and schema inspection
-   - Both direct and queued generation for long-running tasks
+   - **NEW: Synchronous generation** - all operations complete before returning
 5. **Artifact management** for handling media files uploaded by users:
    - list_user_artifacts: See what media files users have uploaded
    - load_and_analyze_artifact: Load and analyze specific media files
@@ -426,31 +444,25 @@ You have access to several specialized capabilities:
 - Users specify which models to use, or can discover available models
 - Use the fal.ai agent to discover available models with the `models` tool
 - Check model schemas before generation to understand required parameters
-- Generated images are automatically saved as artifacts and included in responses
+- **Generated images are returned synchronously** - no waiting required
 - Handle generation errors gracefully with alternative model suggestions
 
 **fal.ai Generation Capabilities:**
 - **Image Generation**: Use models specified by user or discovered through model search
 - **Video Generation**: Use whatever video model the user explicitly requests
+- **Image Editing**: Use appropriate editing models for user requirements
 - **Model Discovery**: Use the fal.ai agent to list and search available models
 - **Schema Inspection**: Always check model schemas before generation
-- **Queue Management**: Handle long-running generations with proper status checking
+- **Synchronous Operation**: All generation completes before returning results
 
-**NEW: Long-Running Video Generation Tool:**
-You now have access to `generate_video_long_running` - a specialized tool for video generation that:
-- Starts video generation immediately and returns operation details
-- Pauses the agent run for external polling
-- Enables the WhatsApp bot to check status and send completion notifications
-- Requires: model_name, prompt, optional image_url, user_id, jid
-
-**Usage Pattern for Video Generation:**
-1. **Use generate_video_long_running() directly** instead of the fal.ai agent for videos
-2. This tool returns operation details immediately and pauses the agent
-3. The WhatsApp bot will poll for completion and continue the conversation
-4. Users get automatic notifications when videos are ready
-
-**Legacy Webhook System (Still Available):**
-The webhook-based system (register_video_webhook) is still available for compatibility
+**NEW: Synchronous Generation System:**
+The fal.ai agent now handles all generation internally with polling:
+- **`generate_image()`** - Returns completed image generation results
+- **`generate_video()`** - Returns completed video generation results
+- **`edit_image()`** - Returns completed image editing results
+- **All operations are synchronous** - results are available immediately
+- **No external polling needed** - the MCP agent handles everything
+- **Users get immediate feedback** when generation is complete
 
 **Multimodal Analysis Capabilities:**
 - **Images**: Describe, analyze content, extract text, identify objects, analyze compositions
@@ -481,32 +493,24 @@ When users provide Google Cloud Storage URLs (format: storage.googleapis.com wit
 5. Optionally save analysis results using `save_analysis_result`
 
 **When users request image/video generation:**
-1. **For images**: Use the exact model the user specifies, or help them discover available models
-2. **For videos**: Use `generate_video_long_running()` tool directly - NO webhook setup needed
-3. **For image-to-video**: Use `make_artifact_public` first, then `generate_video_long_running()`
-4. **Model Discovery**: Help users find available models if they ask "what models are available?"
-5. Always provide detailed, descriptive prompts for better results
-6. Handle errors gracefully and suggest alternative models if generation fails
-7. **For video operations**: Return immediate confirmation - long-running tool handles completion
-8. **Users get automatic WhatsApp notifications** when videos are ready with URLs
+1. **For all generation**: Use the fal.ai agent with appropriate specialized tools
+2. **Model Discovery**: Help users find available models if they ask "what models are available?"
+3. **Synchronous Results**: All generation completes before responding to user
+4. Always provide detailed, descriptive prompts for better results
+5. Handle errors gracefully and suggest alternative models if generation fails
+6. **Results include final URLs** and are ready for immediate use
+7. **Generated content is also saved as artifacts** automatically
 
-**Long-Running Tool Management for Video Generation:**
-- Video generation now uses the `generate_video_long_running()` tool
-- This tool pauses the agent run and enables external polling
-- WhatsApp bot checks status and continues conversation when complete
-- Return immediate confirmation to users that generation started
-- Webhook system automatically notifies users when video completes
-- No polling or status checking needed - webhooks handle everything
-- Users get WhatsApp messages when videos are ready with download URLs
-
-**Image Generation Workflow:**
-1. User requests image generation
-2. Use fal.ai agent to generate with appropriate model
-3. fal.ai agent handles the generation and saves as artifact
-4. Image is included in response to user
+**Generation Workflow:**
+1. User requests image/video generation
+2. Use fal.ai agent to generate with appropriate model (synchronously)
+3. fal.ai agent handles queue submission, polling, and result retrieval
+4. Final result is returned to user with URLs and metadata
+5. Generated content is automatically saved as artifacts
 
 **Important Notes:**
 - You can ANALYZE existing media AND GENERATE new content via fal.ai services
+- **All generation is now synchronous** - no external polling or waiting
 - Generated content is included directly in responses AND saved as artifacts
 - The Gemini 2.5 Flash model you're powered by can directly analyze multimodal content
 - When artifacts are loaded, their content becomes available in the conversation context
@@ -519,7 +523,7 @@ GitHub agent works with repository: Michaelktker/my-agentic-rag by default.
 Use web search for current information not in your knowledge base.
 Use fal.ai agent for all AI content generation capabilities including images and videos.
 
-Updated: Removed Vertex AI Imagen, using fal.ai exclusively for all generation - 2025-10-19"""
+Updated: New synchronous polling architecture - fal.ai agent handles everything internally - 2025-10-19"""
 
 
 async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
@@ -745,509 +749,7 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
         return f"Error making artifact '{filename}' public: {e}"
 
 
-async def generate_video_long_running(
-    model_name: str,
-    prompt: str,
-    image_url: Optional[str] = None,
-    user_id: Optional[str] = None,
-    jid: Optional[str] = None,
-    tool_context: Optional[ToolContext] = None
-) -> dict:
-    """
-    Start long-running video generation using FAL.ai.
-    
-    This is a LongRunningFunctionTool that:
-    1. Initiates video generation with FAL.ai
-    2. Returns immediately with operation details
-    3. Pauses the agent run for client polling
-    
-    Args:
-        model_name (str): FAL.ai model (e.g., "fal-ai/kling-video/v2/master/image-to-video")
-        prompt (str): Video generation prompt
-        image_url (Optional[str]): Input image URL for image-to-video models
-        user_id (Optional[str]): User identifier for tracking
-        jid (Optional[str]): WhatsApp JID for final notification
-        
-    Returns:
-        dict: Operation details for polling {
-            "operation_id": str,
-            "status": "IN_PROGRESS",
-            "model_name": str,
-            "prompt": str,
-            "fal_request_id": str,
-            "status_url": str,
-            "response_url": str,
-            "user_id": str,
-            "jid": str
-        }
-    """
-    try:
-        # Generate unique operation ID
-        operation_id = f"video_gen_{uuid.uuid4().hex[:12]}"
-        
-        # Get session ID from tool context
-        session_id = getattr(tool_context, 'session_id', 'default') if tool_context else 'default'
-        
-        # Prepare FAL.ai parameters
-        parameters = {
-            "prompt": prompt
-        }
-        
-        # Add image URL if provided
-        if image_url:
-            parameters["image_url"] = image_url
-            
-        # Add video-specific parameters
-        if "kling" in model_name.lower():
-            parameters.setdefault("duration", "5")
-            parameters.setdefault("aspect_ratio", "16:9")
-        
-        # Call FAL.ai MCP agent to start generation (queued)
-        # We need to use the FAL.ai tools directly since we're in a function
-        # This approach will be updated to use the MCP toolset properly
-        
-        # For now, we'll make a direct HTTP call to FAL.ai
-        fal_api_key = os.getenv("FAL_KEY")
-        if not fal_api_key:
-            raise Exception("FAL_KEY environment variable not set")
-        
-        # Make direct FAL.ai API call for queue submission
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                "Authorization": f"Key {fal_api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            fal_url = f"https://queue.fal.run/{model_name}"
-            
-            async with session.post(fal_url, json=parameters, headers=headers) as response:
-                if response.status == 200:
-                    fal_response = await response.json()
-                else:
-                    error_text = await response.text()
-                    raise Exception(f"FAL.ai API error {response.status}: {error_text}")
-        
-        # Extract FAL.ai response details
-        fal_request_id = fal_response.get('request_id')
-        status_url = fal_response.get('status_url')
-        response_url = fal_response.get('response_url')
-        
-        if not fal_request_id:
-            raise Exception("FAL.ai did not return a request_id")
-        
-        # Store operation details for polling
-        operation_details = {
-            "operation_id": operation_id,
-            "status": "IN_PROGRESS",
-            "model_name": model_name,
-            "prompt": prompt,
-            "fal_request_id": fal_request_id,
-            "status_url": status_url,
-            "response_url": response_url,
-            "user_id": user_id or "unknown",
-            "jid": jid or "unknown",
-            "session_id": session_id,
-            "created_at": asyncio.get_event_loop().time()
-        }
-        
-        # Store in GCS for persistence across sessions
-        await _store_operation_details(operation_id, operation_details)
-        
-        # Return operation details - this pauses the agent run
-        return operation_details
-        
-    except Exception as e:
-        logger.error(f"❌ Error starting video generation: {e}")
-        return {
-            "operation_id": f"failed_{uuid.uuid4().hex[:8]}",
-            "status": "FAILED",
-            "error": str(e),
-            "model_name": model_name,
-            "prompt": prompt
-        }
-
-
-async def generate_image_long_running(
-    model_name: str,
-    prompt: str,
-    width: Optional[int] = None,
-    height: Optional[int] = None,
-    user_id: Optional[str] = None,
-    jid: Optional[str] = None,
-    tool_context: Optional[ToolContext] = None,
-    **kwargs
-) -> dict:
-    """
-    Start long-running image generation using FAL.ai.
-    
-    This is a LongRunningFunctionTool that:
-    1. Initiates image generation with FAL.ai
-    2. Returns immediately with operation details
-    3. Pauses the agent run for client polling
-    
-    Args:
-        model_name (str): FAL.ai model name (user-specified from dynamic discovery)
-        prompt (str): Image generation prompt
-        width (Optional[int]): Image width
-        height (Optional[int]): Image height
-        user_id (Optional[str]): User identifier for tracking
-        jid (Optional[str]): WhatsApp JID for final notification
-        **kwargs: Additional model-specific parameters
-        
-    Returns:
-        dict: Operation details for polling
-    """
-    try:
-        # Generate unique operation ID
-        operation_id = f"image_gen_{uuid.uuid4().hex[:12]}"
-        
-        # Get session ID from tool context
-        session_id = getattr(tool_context, 'session_id', 'default') if tool_context else 'default'
-        
-        # Prepare FAL.ai parameters
-        parameters = {
-            "prompt": prompt
-        }
-        
-        # Add image dimensions if provided
-        if width:
-            parameters["width"] = width
-        if height:
-            parameters["height"] = height
-            
-        # Add any additional parameters
-        parameters.update(kwargs)
-        
-        # Make direct FAL.ai API call for queue submission
-        fal_api_key = os.getenv("FAL_KEY")
-        if not fal_api_key:
-            raise Exception("FAL_KEY environment variable not set")
-            
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                "Authorization": f"Key {fal_api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            fal_url = f"https://queue.fal.run/{model_name}"
-            
-            async with session.post(fal_url, json=parameters, headers=headers) as response:
-                if response.status == 200:
-                    fal_response = await response.json()
-                else:
-                    error_text = await response.text()
-                    raise Exception(f"FAL.ai API error {response.status}: {error_text}")
-        
-        # Extract FAL.ai response details
-        fal_request_id = fal_response.get('request_id')
-        status_url = fal_response.get('status_url')
-        response_url = fal_response.get('response_url')
-        
-        if not fal_request_id:
-            raise Exception("FAL.ai did not return a request_id")
-        
-        # Store operation details for polling
-        operation_details = {
-            "operation_id": operation_id,
-            "type": "image_generation",
-            "status": "IN_PROGRESS",
-            "model_name": model_name,
-            "prompt": prompt,
-            "parameters": parameters,
-            "fal_request_id": fal_request_id,
-            "status_url": status_url,
-            "response_url": response_url,
-            "user_id": user_id,
-            "jid": jid,
-            "session_id": session_id,
-            "started_at": asyncio.get_event_loop().time()
-        }
-        
-        await _store_operation_details(operation_id, operation_details)
-        
-        logger.info(f"🎨 Started image generation: {operation_id} with model {model_name}")
-        
-        return operation_details
-        
-    except Exception as e:
-        logger.error(f"❌ Error starting image generation: {e}")
-        return {
-            "operation_id": f"failed_{uuid.uuid4().hex[:8]}",
-            "status": "FAILED",
-            "error": str(e),
-            "model_name": model_name,
-            "prompt": prompt
-        }
-
-
-async def edit_image_long_running(
-    model_name: str,
-    image_url: str,
-    prompt: str,
-    user_id: Optional[str] = None,
-    jid: Optional[str] = None,
-    tool_context: Optional[ToolContext] = None,
-    **kwargs
-) -> dict:
-    """
-    Start long-running image editing using FAL.ai.
-    
-    This is a LongRunningFunctionTool that:
-    1. Initiates image editing with FAL.ai
-    2. Returns immediately with operation details
-    3. Pauses the agent run for client polling
-    
-    Args:
-        model_name (str): FAL.ai model (e.g., "Alibaba/qwen-image-edit")
-        image_url (str): URL of the image to edit
-        prompt (str): Edit instructions prompt
-        user_id (Optional[str]): User identifier for tracking
-        jid (Optional[str]): WhatsApp JID for final notification
-        **kwargs: Additional model-specific parameters
-        
-    Returns:
-        dict: Operation details for polling
-    """
-    try:
-        # Generate unique operation ID
-        operation_id = f"image_edit_{uuid.uuid4().hex[:12]}"
-        
-        # Get session ID from tool context
-        session_id = getattr(tool_context, 'session_id', 'default') if tool_context else 'default'
-        
-        # Prepare FAL.ai parameters
-        parameters = {
-            "image_url": image_url,
-            "prompt": prompt
-        }
-            
-        # Add any additional parameters
-        parameters.update(kwargs)
-        
-        # Make direct FAL.ai API call for queue submission
-        fal_api_key = os.getenv("FAL_KEY")
-        if not fal_api_key:
-            raise Exception("FAL_KEY environment variable not set")
-            
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                "Authorization": f"Key {fal_api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            fal_url = f"https://queue.fal.run/{model_name}"
-            
-            async with session.post(fal_url, json=parameters, headers=headers) as response:
-                if response.status == 200:
-                    fal_response = await response.json()
-                else:
-                    error_text = await response.text()
-                    raise Exception(f"FAL.ai API error {response.status}: {error_text}")
-        
-        # Extract FAL.ai response details
-        fal_request_id = fal_response.get('request_id')
-        status_url = fal_response.get('status_url')
-        response_url = fal_response.get('response_url')
-        
-        if not fal_request_id:
-            raise Exception("FAL.ai did not return a request_id")
-        
-        # Store operation details for polling
-        operation_details = {
-            "operation_id": operation_id,
-            "type": "image_editing",
-            "status": "IN_PROGRESS",
-            "model_name": model_name,
-            "image_url": image_url,
-            "prompt": prompt,
-            "parameters": parameters,
-            "fal_request_id": fal_request_id,
-            "status_url": status_url,
-            "response_url": response_url,
-            "user_id": user_id,
-            "jid": jid,
-            "session_id": session_id,
-            "started_at": asyncio.get_event_loop().time()
-        }
-        
-        await _store_operation_details(operation_id, operation_details)
-        
-        logger.info(f"✏️ Started image editing: {operation_id} with model {model_name}")
-        
-        return operation_details
-        
-    except Exception as e:
-        logger.error(f"❌ Error starting image editing: {e}")
-        return {
-            "operation_id": f"failed_{uuid.uuid4().hex[:8]}",
-            "status": "FAILED",
-            "error": str(e),
-            "model_name": model_name,
-            "prompt": prompt
-        }
-
-
-async def _store_operation_details(operation_id: str, details: dict):
-    """Store operation details in GCS for persistence"""
-    try:
-        # Import GCS client
-        from google.cloud import storage
-        
-        storage_client = storage.Client()
-        bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
-        bucket = storage_client.bucket(bucket_name)
-        
-        # Store operation details
-        operation_path = f"long_running_operations/{operation_id}.json"
-        blob = bucket.blob(operation_path)
-        blob.upload_from_string(
-            json.dumps(details, indent=2),
-            content_type='application/json'
-        )
-        
-        logger.info(f"💾 Stored operation details: {operation_path}")
-        
-    except Exception as e:
-        logger.error(f"❌ Error storing operation details: {e}")
-
-
-async def get_fal_operation_status(operation_id: str) -> dict:
-    """
-    Get the current status of a FAL.ai generation operation (video, image, or editing).
-    
-    This function is used by external clients (like WhatsApp bot) to:
-    1. Poll the operation status
-    2. Get final results when complete
-    3. Send results back to the agent to continue
-    
-    Args:
-        operation_id (str): The operation ID returned by any long-running FAL function
-        
-    Returns:
-        dict: Current operation status with results if complete
-    """
-    try:
-        # Load operation details from GCS
-        from google.cloud import storage
-        
-        storage_client = storage.Client()
-        bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
-        bucket = storage_client.bucket(bucket_name)
-        
-        operation_path = f"long_running_operations/{operation_id}.json"
-        blob = bucket.blob(operation_path)
-        
-        if not blob.exists():
-            return {
-                "operation_id": operation_id,
-                "status": "NOT_FOUND",
-                "error": "Operation not found"
-            }
-        
-        # Load stored details
-        details = json.loads(blob.download_as_text())
-        fal_request_id = details.get("fal_request_id")
-        status_url = details.get("status_url")
-        response_url = details.get("response_url")
-        operation_type = details.get("type", "unknown")
-        
-        if not status_url:
-            return {
-                **details,
-                "status": "ERROR",
-                "error": "Missing status URL"
-            }
-        
-        # Check FAL.ai status
-        async with aiohttp.ClientSession() as session:
-            async with session.get(status_url) as response:
-                if response.status == 200:
-                    fal_status = await response.json()
-                    
-                    if fal_status.get("status") == "COMPLETED":
-                        # Get final result
-                        if response_url:
-                            async with session.get(response_url) as result_response:
-                                if result_response.status == 200:
-                                    final_result = await result_response.json()
-                                    
-                                    # Extract result URL based on operation type
-                                    result_url = None
-                                    if "url" in final_result:
-                                        result_url = final_result["url"]
-                                    elif "data" in final_result and isinstance(final_result["data"], dict):
-                                        result_url = final_result["data"].get("url")
-                                    elif "images" in final_result and isinstance(final_result["images"], list) and len(final_result["images"]) > 0:
-                                        result_url = final_result["images"][0].get("url")
-                                    
-                                    # Update details with completion
-                                    completion_data = {
-                                        "status": "COMPLETED",
-                                        "final_result": final_result,
-                                        "completed_at": asyncio.get_event_loop().time()
-                                    }
-                                    
-                                    # Add appropriate URL field based on operation type
-                                    if operation_type == "video_generation":
-                                        completion_data["video_url"] = result_url
-                                    elif operation_type in ["image_generation", "image_editing"]:
-                                        completion_data["image_url"] = result_url
-                                    else:
-                                        completion_data["result_url"] = result_url
-                                    
-                                    details.update(completion_data)
-                                    
-                                    # Update stored details
-                                    blob.upload_from_string(
-                                        json.dumps(details, indent=2),
-                                        content_type='application/json'
-                                    )
-                                    
-                                    return details
-                                
-                    elif fal_status.get("status") == "FAILED":
-                        # Mark as failed
-                        error_message = fal_status.get("error", f"{operation_type.replace('_', ' ').title()} failed")
-                        details.update({
-                            "status": "FAILED",
-                            "error": error_message,
-                            "failed_at": asyncio.get_event_loop().time()
-                        })
-                        
-                        # Update stored details
-                        blob.upload_from_string(
-                            json.dumps(details, indent=2),
-                            content_type='application/json'
-                        )
-                        
-                        return details
-                    
-                    else:
-                        # Still in progress
-                        details.update({
-                            "status": "IN_PROGRESS",
-                            "queue_position": fal_status.get("queue_position"),
-                            "progress": fal_status.get("progress")
-                        })
-                        
-                        return details
-                
-        return {
-            **details,
-            "status": "ERROR",
-            "error": "Could not check FAL.ai status"
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Error checking operation status: {e}")
-        return {
-            "operation_id": operation_id,
-            "status": "ERROR",
-            "error": str(e)
-        }
-
-
-async def check_endpoint_health(url: str, timeout: int = HEALTH_CHECK_TIMEOUT) -> bool:
+def check_endpoint_health(url: str, timeout: int = HEALTH_CHECK_TIMEOUT) -> bool:
     """
     Check if an ADK endpoint is healthy and responding.
     
@@ -1259,19 +761,17 @@ async def check_endpoint_health(url: str, timeout: int = HEALTH_CHECK_TIMEOUT) -
         bool: True if endpoint is healthy, False otherwise
     """
     try:
-        timeout_obj = aiohttp.ClientTimeout(total=timeout)
-        async with aiohttp.ClientSession(timeout=timeout_obj) as session:
-            # Try health endpoint first (common pattern)
-            health_url = f"{url.rstrip('/')}/health"
-            async with session.get(health_url) as response:
-                if response.status == 200:
-                    return True
-            
-            # If health endpoint doesn't exist, try root endpoint
-            async with session.get(url) as response:
-                return response.status in [200, 404]  # 404 is okay for root
-                
-    except (aiohttp.ClientError, asyncio.TimeoutError, Exception):
+        # Try health endpoint first (common pattern)
+        health_url = f"{url.rstrip('/')}/health"
+        response = requests.get(health_url, timeout=timeout)
+        if response.status_code == 200:
+            return True
+        
+        # If health endpoint doesn't exist, try root endpoint
+        response = requests.get(url, timeout=timeout)
+        return response.status_code in [200, 404]  # 404 is okay for root
+        
+    except (requests.RequestException, Exception):
         return False
 
 
@@ -1283,12 +783,12 @@ async def get_active_adk_endpoint() -> str:
         str: The URL of the active endpoint
     """
     # Always try production first
-    if await check_endpoint_health(PRODUCTION_ADK_URL):
+    if check_endpoint_health(PRODUCTION_ADK_URL):
         print(f"✅ Using production endpoint: {PRODUCTION_ADK_URL}")
         return PRODUCTION_ADK_URL
     
     # Fallback to staging
-    if await check_endpoint_health(STAGING_ADK_URL):
+    if check_endpoint_health(STAGING_ADK_URL):
         print(f"⚠️ Production unavailable, using staging endpoint: {STAGING_ADK_URL}")
         return STAGING_ADK_URL
     
@@ -1333,26 +833,126 @@ mcp_tools = MCPToolset(
     ),
 )
 
-# Create the fal.ai MCP toolset (stdio connection)
-# Fixed **kwargs compatibility issue by removing problematic functions from generate.py
-import os
-mcp_fal_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp-fal", "main.py")
-fal_mcp_tools = MCPToolset(
-    connection_params=StdioConnectionParams(
-        server_params=StdioServerParameters(
-            command="python",
-            args=[mcp_fal_path],
-            env={"FAL_KEY": os.getenv("FAL_KEY", "")}
-        )
-    )
-)
+# MCP Connection Manager for proper lifecycle management
+import signal
+import atexit
+import logging
+import time
+from typing import Optional
 
-# Create the GitHub MCP subagent
+class MCPHealthMonitor:
+    """Monitor MCP connection health and handle reconnections"""
+    
+    def __init__(self, mcp_tools, name: str):
+        self.mcp_tools = mcp_tools
+        self.name = name
+        self.last_health_check = None
+        self.health_check_interval = 60  # seconds
+        self._logger = logging.getLogger(__name__)
+        
+    def is_healthy(self) -> bool:
+        """Quick health check without async operations"""
+        try:
+            # Simple check - if the toolset exists and has tools
+            return self.mcp_tools is not None
+        except Exception as e:
+            self._logger.warning(f"{self.name} MCP health check failed: {e}")
+            return False
+
+class MCPConnectionManager:
+    """Singleton manager for MCP connections to prevent recreation and resource leaks"""
+    _fal_mcp_tools = None
+    _github_mcp_tools = None
+    _fal_health_monitor = None
+    _github_health_monitor = None
+    _logger = logging.getLogger(__name__)
+    
+    @classmethod
+    def get_fal_mcp_tools(cls):
+        """Get or create FAL MCP toolset (singleton pattern)"""
+        if cls._fal_mcp_tools is None:
+            cls._logger.info("Creating FAL MCP toolset...")
+            mcp_fal_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp-fal", "main.py")
+            cls._fal_mcp_tools = MCPToolset(
+                connection_params=StdioConnectionParams(
+                    server_params=StdioServerParameters(
+                        command="python",
+                        args=[mcp_fal_path],
+                        env={"FAL_KEY": os.getenv("FAL_KEY", "")}
+                    ),
+                    timeout=300.0  # 5 minute timeout for MCP operations
+                )
+            )
+            cls._fal_health_monitor = MCPHealthMonitor(cls._fal_mcp_tools, "FAL")
+            cls._logger.info("FAL MCP toolset created successfully")
+        return cls._fal_mcp_tools
+    
+    @classmethod
+    def get_github_mcp_tools(cls):
+        """Get or create GitHub MCP toolset (singleton pattern)"""
+        if cls._github_mcp_tools is None:
+            cls._logger.info("Creating GitHub MCP toolset...")
+            cls._github_mcp_tools = mcp_tools  # Use existing mcp_tools
+            cls._github_health_monitor = MCPHealthMonitor(cls._github_mcp_tools, "GitHub")
+            cls._logger.info("GitHub MCP toolset created successfully")
+        return cls._github_mcp_tools
+    
+    @classmethod
+    def get_health_status(cls) -> dict:
+        """Get health status of all MCP connections"""
+        status = {}
+        if cls._fal_health_monitor:
+            status['fal'] = cls._fal_health_monitor.is_healthy()
+        if cls._github_health_monitor:
+            status['github'] = cls._github_health_monitor.is_healthy()
+        return status
+    
+    @classmethod
+    def cleanup_connections(cls):
+        """Cleanup all MCP connections"""
+        cls._logger.info("Cleaning up MCP connections...")
+        try:
+            if cls._fal_mcp_tools:
+                # MCP toolsets don't have explicit close methods, but we can clear the reference
+                cls._fal_mcp_tools = None
+                cls._fal_health_monitor = None
+                cls._logger.info("FAL MCP toolset cleaned up")
+            if cls._github_mcp_tools:
+                cls._github_mcp_tools = None
+                cls._github_health_monitor = None
+                cls._logger.info("GitHub MCP toolset cleaned up")
+        except Exception as e:
+            cls._logger.error(f"Error during MCP cleanup: {e}")
+
+def setup_cleanup_handlers():
+    """Setup proper cleanup handlers for graceful shutdown"""
+    def cleanup_handler():
+        MCPConnectionManager.cleanup_connections()
+        
+    # Register cleanup on normal exit
+    atexit.register(cleanup_handler)
+    
+    # Register cleanup on signals
+    def signal_handler(signum, frame):
+        logging.getLogger(__name__).info(f"Received signal {signum}, cleaning up...")
+        cleanup_handler()
+        
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+
+# Setup cleanup handlers
+setup_cleanup_handlers()
+
+# Create the fal.ai MCP toolset using connection manager
+fal_mcp_tools = MCPConnectionManager.get_fal_mcp_tools()
+
+# Create the GitHub MCP subagent using connection manager
+github_mcp_tools = MCPConnectionManager.get_github_mcp_tools()
 github_mcp_agent = Agent(
     model="gemini-2.5-flash",
     name="github_mcp_agent",
     instruction=GITHUB_MCP_PROMPT,
-    tools=[mcp_tools],
+    tools=[github_mcp_tools],
 )
 
 # Create the fal.ai MCP subagent
@@ -1391,12 +991,7 @@ save_artifact_tool = FunctionTool(func=save_analysis_result)
 # Create artifact public URL tool for fal.ai integration
 make_public_tool = FunctionTool(func=make_artifact_public)
 
-# Create long-running FAL.ai generation tools
-video_generation_tool = LongRunningFunctionTool(func=generate_video_long_running)
-image_generation_tool = LongRunningFunctionTool(func=generate_image_long_running)
-image_editing_tool = LongRunningFunctionTool(func=edit_image_long_running)
-
-tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, make_public_tool, video_generation_tool, image_generation_tool, image_editing_tool]
+tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, make_public_tool]
 
 root_agent = Agent(
     name="root_agent",

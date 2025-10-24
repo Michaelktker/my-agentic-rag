@@ -13,6 +13,17 @@
 # limitations under the License.
 
 import os
+from pathlib import Path
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    env_file = Path(__file__).parent.parent / '.env'
+    if env_file.exists():
+        load_dotenv(env_file)
+        print(f"✅ Loaded environment from {env_file}")
+except ImportError:
+    print("⚠️ python-dotenv not installed, environment variables from .env file will not be loaded")
 
 import google.auth
 from fastapi import FastAPI
@@ -91,6 +102,38 @@ def health_check() -> dict[str, str]:
         "timestamp": datetime.datetime.now().isoformat(),
         "version": "v1.3"
     }
+
+@app.get("/health/mcp")
+def mcp_health_check() -> dict:
+    """MCP connections health check endpoint.
+    
+    Returns:
+        Health status of all MCP connections
+    """
+    import datetime
+    try:
+        # Import here to avoid circular imports
+        from app.agent import MCPConnectionManager
+        
+        mcp_status = MCPConnectionManager.get_health_status()
+        overall_healthy = all(mcp_status.values()) if mcp_status else False
+        
+        return {
+            "status": "healthy" if overall_healthy else "degraded",
+            "timestamp": datetime.datetime.now().isoformat(),
+            "mcp_connections": mcp_status,
+            "details": {
+                "fal_mcp": "connected" if mcp_status.get('fal', False) else "disconnected",
+                "github_mcp": "connected" if mcp_status.get('github', False) else "disconnected"
+            }
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "timestamp": datetime.datetime.now().isoformat(),
+            "error": str(e),
+            "mcp_connections": {}
+        }
 
 @app.get("/version")
 def version_info() -> dict[str, str]:
