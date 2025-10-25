@@ -71,10 +71,31 @@ A production-ready system that combines:
 │  Google Cloud Storage ← Artifacts & Auth State                     │
 │                         ↕                                           │
 │  ADK Agent ↔ GitHub MCP Tools ↔ Vertex AI Search                   │
-│       ↕                                                             │
-│  fal.ai MCP Server ↔ 100+ AI Models (FLUX, Video, Upscaling)       │
+│       ↕            ↕                                                │
+│  Polling Agent ← fal.ai MCP Server ↔ 100+ AI Models               │
+│    (Smart         (FLUX, Video, Upscaling, Image Generation)       │
+│   Timeouts)                                                         │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+### Polling Agent Architecture (New)
+
+The system now uses a **polling agent** instead of long-running function tools to handle media generation:
+
+**Workflow:**
+1. **User Request** → FAL MCP Agent initiates generation
+2. **FAL MCP Agent** → Returns request_id and status_url  
+3. **Root Agent** → Calls polling agent with status details
+4. **Polling Agent** → Smart polling based on media type:
+   - **Images**: 20 quick checks (usually complete in 30-60s)
+   - **Videos**: 3 quick checks, then returns guidance message
+5. **User Check-back** → Manual status check for long operations
+
+**Benefits:**
+- ✅ **ADK Compatible**: Works within ADK's request timeout constraints
+- ✅ **User Friendly**: Clear guidance on when to check back
+- ✅ **Reliable**: No hanging connections or timeout errors
+- ✅ **Efficient**: Quick completion for fast operations (images)
 
 ## 🔧 Recent Architectural Improvements
 

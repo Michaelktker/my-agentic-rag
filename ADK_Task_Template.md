@@ -4,6 +4,8 @@
 
 Google's Agent Development Kit (ADK) is a flexible, open-source framework for building, evaluating, and deploying sophisticated AI agents. This template provides a comprehensive guide for implementing ADK-based solutions with production-ready patterns and best practices.
 
+**⭐ Updated for Polling Agent Architecture**: This template now includes patterns for handling long-running operations (like video generation) using the polling agent pattern instead of long-running function tools.
+
 ## 🏗️ Core Architecture & Concepts
 
 ### 1. **Agent Types**

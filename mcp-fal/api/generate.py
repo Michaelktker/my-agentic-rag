@@ -14,17 +14,14 @@ def register_generation_tools(mcp: FastMCP):
     """Register generation-related tools with the MCP server."""
     
     @mcp.tool()
-    async def generate(model: str, parameters: Dict[str, Any], queue: bool = True) -> Dict[str, Any]:
+    async def generate(model: str, parameters: Dict[str, Any], queue: bool) -> Dict[str, Any]:
         """
         Generate content using a fal.ai model through the queue system.
-        
-        ALL operations are forced to use the queue for consistent long-running behavior.
-        This ensures proper integration with the LongRunningFunctionTool pattern.
         
         Args:
             model: The model ID to use (e.g., "fal-ai/flux/dev")
             parameters: Model-specific parameters as a dictionary
-            queue: Always forced to True for consistent long-running behavior
+            queue: Whether to use queue system (should be True for long-running operations)
             
         Returns:
             The queued request details with status_url, response_url, etc.
