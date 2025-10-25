@@ -17,6 +17,10 @@ import asyncio
 import json
 from typing import Dict, Any
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 import google.auth
 from fastapi import FastAPI, BackgroundTasks, Request

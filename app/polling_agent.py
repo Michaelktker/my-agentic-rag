@@ -277,7 +277,7 @@ async def poll_fal_operation(fal_request_id: str, submission_type: str = "text-t
         
         # Reached max attempts - return helpful message based on submission type
         if submission_type == "text-to-video":
-            timeout_result = f"""⏰ Your video is still being generated (taking longer than 90 seconds).
+            timeout_result = f"""⏰ @Fal Your video is still being generated (taking longer than 90 seconds).
 
 Video generation can take 2-5 minutes depending on the model and complexity.
 

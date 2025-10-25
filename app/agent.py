@@ -21,12 +21,15 @@ import uuid
 import json
 import logging
 import time
+import re
+from datetime import datetime
 from io import BytesIO
 from typing import Optional
 
 import google
 import vertexai
 from google.adk.agents import Agent
+from google.adk.agents.callback_context import CallbackContext
 from google.adk.tools.mcp_tool import MCPToolset, StreamableHTTPConnectionParams, StdioConnectionParams
 from mcp.client.stdio import StdioServerParameters
 from google.adk.tools import google_search
@@ -35,6 +38,24 @@ from google.adk.tools import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 from langchain_google_vertexai import VertexAIEmbeddings
+
+
+def has_myker_mention(text: str) -> bool:
+    """
+    Check if the text contains a @Myker mention (case-insensitive).
+    
+    Args:
+        text (str): The text to check for mentions
+        
+    Returns:
+        bool: True if @Myker mention is found, False otherwise
+    """
+    if not text:
+        return False
+    
+    # Use regex to find @Myker mentions (case-insensitive)
+    pattern = r'@myker\b'
+    return bool(re.search(pattern, text, re.IGNORECASE))
 
 
 from app.retrievers import get_compressor, get_retriever
@@ -337,6 +358,8 @@ DO NOT try to poll yourself - just return the information and let the parent age
 """
 
 instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis, PLUS image generation via multiple sources.
+
+**IMPORTANT**: You are activated via @Myker mentions. The mention is automatically detected and removed from messages before you see them, so you don't need to check for it - just respond naturally to all requests you receive.
 
 Answer to the best of your ability using the context provided and leverage the tools available to you.
 
@@ -764,6 +787,58 @@ make_public_tool = FunctionTool(func=make_artifact_public)
 from app.polling_agent import poll_fal_operation
 poll_fal_tool = FunctionTool(func=poll_fal_operation)
 
+
+# Mention checking callbacks for @Myker
+async def before_agent_callback(callback_context: CallbackContext) -> None:
+    """Check if message contains @Myker mention before processing."""
+    try:
+        # Get the current user message from invocation context
+        user_content = callback_context._invocation_context.user_content
+        
+        if user_content and hasattr(user_content, 'parts'):
+            # Extract text from all parts
+            message_text = ""
+            for part in user_content.parts:
+                if hasattr(part, 'text') and part.text:
+                    message_text += part.text + " "
+            
+            message_text = message_text.strip()
+            print(f"[MENTION CHECK] Checking message: {message_text}")
+            
+            # Check for @Myker mention
+            if not has_myker_mention(message_text):
+                print("[MENTION CHECK] No @Myker mention found - ending invocation")
+                callback_context._invocation_context.end_invocation = True
+            else:
+                print("[MENTION CHECK] @Myker mention found - proceeding with agent")
+                
+    except Exception as e:
+        print(f"[MENTION CHECK] Error in before_agent_callback: {e}")
+        # On error, proceed normally to avoid blocking the system
+        pass
+
+
+async def after_agent_callback(callback_context: CallbackContext) -> None:
+    """Log completion of agent processing."""
+    try:
+        user_content = callback_context._invocation_context.user_content
+        
+        if user_content and hasattr(user_content, 'parts'):
+            message_text = ""
+            for part in user_content.parts:
+                if hasattr(part, 'text') and part.text:
+                    message_text += part.text + " "
+            
+            message_text = message_text.strip()
+            
+            if has_myker_mention(message_text):
+                print(f"[MENTION CHECK] Completed processing message with @Myker: {message_text}")
+            
+    except Exception as e:
+        print(f"[MENTION CHECK] Error in after_agent_callback: {e}")
+        pass
+
+
 tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, make_public_tool, poll_fal_tool]
 
 root_agent = Agent(
@@ -771,6 +846,8 @@ root_agent = Agent(
     model="gemini-2.5-flash",
     instruction=instruction,
     tools=tools,
+    before_agent_callback=before_agent_callback,
+    after_agent_callback=after_agent_callback,
 )
 # CI/CD Test: Fri Oct  3 15:49:27 UTC 2025 - Testing deployment pipeline
 # CI/CD Pipeline Test: Sun Oct  5 16:29:20 UTC 2025 - Testing automated deployment with latest Secret Manager integration
