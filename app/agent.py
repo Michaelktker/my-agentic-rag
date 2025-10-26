@@ -625,9 +625,9 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
                 logger.info(f"  ❌ No match: '{found_filename}' != '{filename}'")
         
         if not found_blob:
-            error_msg = f"❌ Artifact '{filename}' not found in GCS.\n\nSearched:\n- Bucket: {artifacts_bucket_name}\n- Prefix: {prefix}\n- Found {len(blobs)} blobs total\n\nAvailable files in searched location:\n"
+            error_msg = f"❌ Artifact '{filename}' not found in GCS.\n\nSearched:\n- Bucket: {artifacts_bucket_name}\n- Prefix: {prefix}\n- Found {len(blobs)} blobs total\n\nFull blob paths (first 10):\n"
             for blob in blobs[:10]:  # Show first 10 files
-                error_msg += f"  • {blob.name.split('/')[-1]}\n"
+                error_msg += f"  • {blob.name}\n"
             if len(blobs) > 10:
                 error_msg += f"  ... and {len(blobs) - 10} more files"
             logger.error(error_msg)
