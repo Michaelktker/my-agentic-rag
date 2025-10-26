@@ -202,12 +202,12 @@ async def save_inline_media_as_artifact(
                 if hasattr(inline_data, 'data') and hasattr(inline_data, 'mime_type'):
                     import base64
                     
-                    # Decode the base64 data
-                    media_data = base64.b64decode(inline_data.data)
+                    # Create an artifact part with the inline_data
+                    # The tool_context.save_artifact expects an artifact part, not raw data
                     mime_type = inline_data.mime_type
                     
-                    # Save as artifact using tool_context
-                    version = await tool_context.save_artifact(filename, media_data, mime_type)
+                    # Save as artifact using tool_context - pass the inline_data directly
+                    version = await tool_context.save_artifact(filename, inline_data)
                     saved_count += 1
                     
                     logger.info(f"Saved inline_data as artifact: {filename} (version: {version})")
