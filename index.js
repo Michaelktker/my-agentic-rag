@@ -894,7 +894,7 @@ class WhatsAppBot {
                 markOnlineOnConnect: config.whatsapp.markOnlineOnConnect,
                 generateHighQualityLinkPreview: config.whatsapp.generateHighQualityLinkPreview,
                 syncFullHistory: config.whatsapp.syncFullHistory,
-                shouldIgnoreJid: jid => jid.endsWith('@broadcast'),
+                shouldIgnoreJid: jid => jid && jid.endsWith('@broadcast'),
                 emitOwnEvents: false,
                 defaultQueryTimeoutMs: config.whatsapp.defaultQueryTimeoutMs
             });
@@ -1099,7 +1099,21 @@ class WhatsAppBot {
             }
 
             // Prepare message for ADK (combine text and media)
-            let adkMessage = messageText || 'I\'ve uploaded a media file for you to analyze.';
+            let adkMessage = messageText;
+            
+            // If no text provided and media is uploaded, auto-trigger analysis with @Myker
+            if (!messageText && mediaParts.length > 0) {
+                // Check if it's an image or video (for automatic renaming)
+                const hasImageOrVideo = mediaParts.some(media => 
+                    media.mimeType.startsWith('image/') || media.mimeType.startsWith('video/')
+                );
+                
+                if (hasImageOrVideo) {
+                    adkMessage = '@Myker Please analyze this image/video and provide a detailed description.';
+                } else {
+                    adkMessage = '@Myker I\'ve uploaded a media file for you to analyze.';
+                }
+            }
             
             // Welcome message disabled - skip greeting
             // if (!session.hasGreeted) {
@@ -1132,6 +1146,12 @@ class WhatsAppBot {
 
         } catch (error) {
             logger.error('Error handling incoming message:', error);
+            logger.error('Error stack:', error.stack);
+            logger.error('Error details:', {
+                message: error.message,
+                name: error.name,
+                stack: error.stack
+            });
         }
     }
 
@@ -1543,6 +1563,12 @@ class WhatsAppBot {
         try {
             logger.info(`ADK Non-Streaming Response: ${JSON.stringify(data)}`);
             
+            // Handle empty response (happens when no @Myker mention) - ignore silently
+            if (!data || (Array.isArray(data) && data.length === 0)) {
+                logger.info('Empty ADK response (likely no @Myker mention) - ignoring message silently');
+                return null; // Return null to indicate no response should be sent
+            }
+            
             // Extract response from data - return both text and images
             let responseText = '';
             let imageParts = [];
@@ -1664,6 +1690,11 @@ class WhatsAppBot {
 
             // Fallback - return informative error message
             logger.info(`ADK Raw Response: ${JSON.stringify(data)}`);
+            // Check if this is an empty response (no @Myker mention) - return null instead of error
+            if (Array.isArray(data) && data.length === 0) {
+                logger.info('Empty ADK response detected in fallback - returning null');
+                return null;
+            }
             return 'I received your message, but the AI service returned an unexpected response format. Please try rephrasing your question.';
         } catch (error) {
             logger.error('Error parsing ADK response:', error);

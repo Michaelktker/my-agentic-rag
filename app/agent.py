@@ -238,31 +238,81 @@ Note: The file content is available in the conversation context for direct analy
         return f"Error loading artifact '{filename}': {e}. Use list_user_artifacts to see available files."
 
 
-async def save_analysis_result(filename: str, analysis_content: str, tool_context: ToolContext) -> str:
+async def rename_and_save_media_artifact(
+    original_filename: str, 
+    description: str, 
+    tool_context: ToolContext
+) -> str:
     """
-    Saves an analysis result as a new artifact.
-    Use this to save your analysis or generated content back to the user's artifacts.
+    Renames a media artifact (image or video) with a descriptive filename and saves it.
+    This function loads the original artifact, creates a new filename based on the description,
+    and saves it with the new name.
 
     Args:
-        filename (str): Name for the new artifact file (e.g., "analysis_result.txt")
-        analysis_content (str): The content to save
+        original_filename (str): The original name of the media artifact
+        description (str): A 50-character or less description to use as the new filename
+        tool_context (ToolContext): Context for accessing artifacts
 
     Returns:
-        str: Confirmation message with saved artifact details
+        str: Confirmation message with the new filename and version
     """
     try:
-        # Create a Part object with the analysis content
-        analysis_part = types.Part.from_text(text=analysis_content)
+        # Load the original artifact
+        artifact_part = await tool_context.load_artifact(original_filename)
         
-        # Save the artifact
-        version = await tool_context.save_artifact(filename, analysis_part)
+        if not artifact_part:
+            return f"Error: Artifact '{original_filename}' not found. Use list_user_artifacts to see available files."
         
-        return f"Successfully saved analysis result as '{filename}' (version {version}). The user can now access this analysis result through their WhatsApp bot."
+        # Validate description length (should be ~50 chars)
+        if len(description) > 60:
+            description = description[:60]
+        
+        # Clean the description to make it a valid filename
+        # Replace spaces with underscores and remove invalid characters
+        clean_description = description.strip()
+        clean_description = clean_description.replace(' ', '_')
+        clean_description = ''.join(c for c in clean_description if c.isalnum() or c in ('_', '-'))
+        
+        # Get file extension from original filename
+        original_ext = ""
+        if '.' in original_filename:
+            original_ext = original_filename.rsplit('.', 1)[1]
+        
+        # Determine extension from mime type if not available
+        if not original_ext and hasattr(artifact_part, 'inline_data') and artifact_part.inline_data:
+            mime_type = artifact_part.inline_data.mime_type
+            if mime_type:
+                if 'jpeg' in mime_type or 'jpg' in mime_type:
+                    original_ext = 'jpg'
+                elif 'png' in mime_type:
+                    original_ext = 'png'
+                elif 'mp4' in mime_type:
+                    original_ext = 'mp4'
+                elif 'webm' in mime_type:
+                    original_ext = 'webm'
+        
+        # Create new filename with description
+        if original_ext:
+            new_filename = f"{clean_description}.{original_ext}"
+        else:
+            new_filename = clean_description
+        
+        # Save the artifact with the new filename
+        version = await tool_context.save_artifact(new_filename, artifact_part)
+        
+        return f"""✅ Successfully renamed and saved media artifact!
+
+**Original filename**: {original_filename}
+**New filename**: {new_filename}
+**Description**: {description}
+**Version**: {version}
+
+The artifact has been saved with a descriptive filename and is now available to the user."""
         
     except ValueError as e:
-        return f"Error saving analysis result: {e}. Is the artifact service configured?"
+        return f"Error: {e}. Is the artifact service configured?"
     except Exception as e:
-        return f"An unexpected error occurred while saving analysis: {e}"
+        return f"An unexpected error occurred while renaming artifact: {type(e).__name__}: {e}"
 
 
 
@@ -380,7 +430,7 @@ You have access to several specialized capabilities:
 6. **Artifact management** for handling media files uploaded by users:
    - list_user_artifacts: See what media files users have uploaded
    - load_and_analyze_artifact: Load and analyze specific media files
-   - save_analysis_result: Save your analysis results back as artifacts
+   - rename_and_save_media_artifact: Automatically rename images/videos with descriptive filenames
    - make_artifact_public: Make GCS artifacts publicly accessible for fal.ai processing
 
 **FAL.ai Video/Image Generation Workflow:**
@@ -426,6 +476,24 @@ The webhook-based system (register_video_webhook) is still available for compati
 - **Videos**: Analyze visual content, describe scenes, extract key frames
 - **Documents**: Read, summarize, extract information from PDFs and text files
 
+**IMPORTANT: Automatic Descriptive Renaming for Images and Videos**
+When you load and analyze an image or video artifact using `load_and_analyze_artifact`:
+1. **Analyze the media content** thoroughly
+2. **Generate a concise 50-character description** that captures the key visual elements
+3. **Automatically call `rename_and_save_media_artifact`** with:
+   - original_filename: The filename you just loaded
+   - description: Your 50-character description
+   - This saves the artifact with a descriptive, searchable filename
+
+Example workflow:
+User: "Analyze my image"
+→ You call load_and_analyze_artifact("IMG_1234.jpg", "analyze image")
+→ You see it's an image of a sunset over mountains
+→ You immediately call rename_and_save_media_artifact("IMG_1234.jpg", "sunset_over_snowy_mountain_peaks_golden_hour")
+→ The artifact is now saved with a descriptive name for easy future reference
+
+This ONLY applies to images and videos - not audio or documents.
+
 **Working with Uploaded Images for fal.ai:**
 When users upload an image and want to use it with fal.ai models (especially for image-to-video):
 1. First, use `list_user_artifacts` to see available files
@@ -445,8 +513,8 @@ When users provide Google Cloud Storage URLs (format: storage.googleapis.com wit
 1. First use `list_user_artifacts` to see what files are available
 2. Use `load_and_analyze_artifact` to load specific files for analysis
 3. Provide detailed analysis using your multimodal capabilities
-4. If using with fal.ai, use `make_artifact_public` to create public GCS URLs
-5. Optionally save analysis results using `save_analysis_result`
+4. **For images/videos**: Automatically call `rename_and_save_media_artifact` with a 50-char description
+5. If using with fal.ai, use `make_artifact_public` to create public GCS URLs
 
 **When users request image/video generation:**
 1. **For images**: Use the exact model the user specifies, or help them discover available models
@@ -776,7 +844,7 @@ websearch_tool = AgentTool(agent=websearch_agent)
 # Create artifact management tools
 list_artifacts_tool = FunctionTool(func=list_user_artifacts)
 load_artifact_tool = FunctionTool(func=load_and_analyze_artifact)
-save_artifact_tool = FunctionTool(func=save_analysis_result)
+rename_media_artifact_tool = FunctionTool(func=rename_and_save_media_artifact)
 
 
 
@@ -839,7 +907,7 @@ async def after_agent_callback(callback_context: CallbackContext) -> None:
         pass
 
 
-tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, save_artifact_tool, make_public_tool, poll_fal_tool]
+tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, rename_media_artifact_tool, make_public_tool, poll_fal_tool]
 
 root_agent = Agent(
     name="root_agent",
