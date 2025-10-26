@@ -572,11 +572,12 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
             logger.info(f"⚠️ No user_id found, using wildcard search across all users")
         
         # Determine search prefix based on user_id
+        # GCS structure: app/{user_id}/{session_id}/{filename}/{version}
         if user_id == '*':
             prefix = "app/"
             logger.info(f"🔎 Wildcard search with prefix: {prefix}")
         else:
-            prefix = f"app/{user_id}/shared/"
+            prefix = f"app/{user_id}/"
             logger.info(f"🔎 User-specific search with prefix: {prefix}")
         
         # List all blobs with this prefix to find artifacts
@@ -587,26 +588,17 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
         found_blob = None
         
         for blob in blobs:
-            # Extract the path components: app/user_id/shared/filename
+            # Extract the path components: app/user_id/session_id/filename/version
             path_parts = blob.name.split('/')
             logger.info(f"🔍 Checking blob: {blob.name} (parts: {len(path_parts)})")
             
-            if user_id == '*':
-                # Path: app/user_id/shared/filename (4 parts minimum)
-                if len(path_parts) >= 4 and path_parts[2] == 'shared':
-                    found_filename = path_parts[3]
-                    logger.info(f"  📄 Extracted filename: {found_filename}")
-                else:
-                    logger.info(f"  ⏭️ Skipping: not in shared/ directory")
-                    continue
+            # Path structure: app/user_id/session_id/filename/version (5 parts)
+            if len(path_parts) >= 5:
+                found_filename = path_parts[3]  # filename is at index 3
+                logger.info(f"  📄 Extracted filename: {found_filename}")
             else:
-                # Path: app/user_id/shared/filename (4 parts exact for our prefix)
-                if len(path_parts) >= 4:
-                    found_filename = path_parts[3]
-                    logger.info(f"  📄 Extracted filename: {found_filename}")
-                else:
-                    logger.info(f"  ⏭️ Skipping: insufficient path parts")
-                    continue
+                logger.info(f"  ⏭️ Skipping: insufficient path parts (need 5, got {len(path_parts)})")
+                continue
             
             # Check if this blob matches our target filename (with or without version suffix)
             # Strip version suffix if present (e.g., "file.jpg v1" -> "file.jpg")
