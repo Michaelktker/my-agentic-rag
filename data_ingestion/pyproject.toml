@@ -2,7 +2,6 @@
 name = "data-ingestion-pipeline"
 version = "0.1.0"
 description = "Data ingestion pipeline for RAG retriever"
-readme = "README.md"
 requires-python = ">=3.9, <=3.13"
 dependencies = [
     "google-cloud-aiplatform>=1.80.0",
