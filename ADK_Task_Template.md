@@ -4,7 +4,7 @@
 
 Google's Agent Development Kit (ADK) is a flexible, open-source framework for building, evaluating, and deploying sophisticated AI agents. This template provides a comprehensive guide for implementing ADK-based solutions with production-ready patterns and best practices.
 
-**⭐ Updated for Polling Agent Architecture**: This template now includes patterns for handling long-running operations (like video generation) using the polling agent pattern instead of long-running function tools.
+**⭐ Updated for Production Patterns**: This template includes battle-tested patterns from real-world deployment including polling agents, MCP integration, media handling, and advanced artifact management.
 
 ## 🏗️ Core Architecture & Concepts
 
@@ -195,17 +195,38 @@ parallel_fetch = ParallelAgent(
 from google.adk.tools.agent_tool import AgentTool
 
 # Specialized agent
-image_generator = LlmAgent(name="ImageGen", description="Generates images")
+specialized_agent = LlmAgent(name="DataAnalyzer", ...)
 
-# Wrap as tool
-image_tool = AgentTool(agent=image_generator)
+# Wrap as tool for parent agent
+analyzer_tool = AgentTool(agent=specialized_agent)
 
 # Use in parent agent
-artist_agent = LlmAgent(
-    name="Artist",
-    model="gemini-2.5-flash",
-    instruction="Create images using the ImageGen tool",
-    tools=[image_tool]
+parent_agent = Agent(
+    name="parent",
+    tools=[analyzer_tool, other_tools]
+)
+```
+
+#### **MCP Integration Pattern**
+```python
+from google.adk.tools.mcp_tool import MCPToolset
+
+# External MCP server (e.g., fal.ai models)
+fal_mcp_toolset = MCPToolset(
+    label="fal-mcp",
+    command="python",
+    args=["main.py"],
+    cwd="/path/to/mcp-fal",
+    env={"FAL_KEY": "your_api_key"}
+)
+
+# Wrap as AgentTool
+fal_agent_tool = AgentTool(agent=fal_mcp_toolset)
+
+# Integration with root agent
+root_agent = Agent(
+    name="root_agent",
+    tools=[fal_agent_tool]
 )
 ```
 
@@ -719,6 +740,212 @@ customer_service = LlmAgent(
 - ✅ Use secure credential management
 - ✅ Audit tool usage
 - ✅ Implement rate limiting
+
+## 🎯 Production-Ready Patterns
+
+### Mention-Based Activation
+```python
+from google.adk.agents.callback_context import CallbackContext
+import re
+
+def before_agent_callback(callback_context: CallbackContext):
+    """Check for @Myker mention before agent execution."""
+    message_parts = callback_context.request.new_message.parts
+    message_text = ""
+    
+    # Extract text from message parts
+    for part in message_parts:
+        if hasattr(part, 'text') and part.text:
+            message_text += part.text + " "
+    
+    # Check for mention (case-insensitive)
+    if "@myker" not in message_text.lower():
+        callback_context.context["skip_processing"] = True
+        callback_context.context["mention_response"] = (
+            "I only respond when mentioned with @Myker. "
+            "Please include @Myker in your message."
+        )
+        return
+        
+    # Clean message by removing @Myker mention
+    cleaned_text = re.sub(r'@myker\s*', '', message_text, flags=re.IGNORECASE)
+    for part in message_parts:
+        if hasattr(part, 'text') and part.text:
+            part.text = cleaned_text.strip()
+            break
+    callback_context.context["skip_processing"] = False
+
+def after_agent_callback(callback_context: CallbackContext):
+    """Handle mention response if processing was skipped."""
+    if callback_context.context.get("skip_processing", False):
+        mention_response = callback_context.context.get("mention_response", "")
+        callback_context.response.candidates[0].content.parts[0].text = mention_response
+```
+
+### Polling Agent for Long Operations
+```python
+async def poll_fal_operation(
+    fal_request_id: str,
+    status_url: str = "",
+    model_name: str = "",
+    submission_type: str = "image"
+) -> str:
+    """Smart polling strategy for long-running operations."""
+    
+    # Quick check attempts based on media type
+    max_quick_checks = 20 if submission_type != "text-to-video" else 3
+    
+    for attempt in range(max_quick_checks):
+        try:
+            final_status_url = status_url or f"https://queue.fal.run/{model_name}/requests/{fal_request_id}/status"
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(final_status_url, headers=headers)
+                
+            if response.status_code in [200, 202]:
+                data = response.json()
+                status = data.get("status", "unknown")
+                
+                if status == "completed":
+                    # Return completed result
+                    return format_completion_response(data)
+                elif status in ["failed", "cancelled"]:
+                    return f"❌ Operation {status}: {data.get('error', 'Unknown error')}"
+                    
+            await asyncio.sleep(3)
+            
+        except Exception as e:
+            if attempt == max_quick_checks - 1:
+                return f"❌ Polling error: {str(e)}"
+    
+    # For videos, return guidance message
+    if submission_type == "text-to-video":
+        return f"""⏳ **Your video is being generated!** 🎬
+
+Video generation typically takes **2-5 minutes**. 
+
+**What to do:**
+1. ✨ Wait 2-3 minutes  
+2. 💬 Ask me: *"Check the status of my video"*
+3. 🔄 I'll check and get your video for you!
+
+**Request ID:** `{fal_request_id}`
+"""
+    
+    return "⏳ Still processing, please try again in a moment..."
+```
+
+### Smart Media Artifact Management
+```python
+async def rename_and_save_media_artifact(
+    filename: str,
+    tool_context: ToolContext
+) -> str:
+    """AI-powered smart media renaming and persistence."""
+    
+    # Load artifact from current session
+    try:
+        artifacts = await tool_context.list_artifacts()
+        target_artifact = None
+        
+        for artifact in artifacts:
+            if artifact.name == filename:
+                target_artifact = artifact
+                break
+        
+        if not target_artifact:
+            return f"❌ Artifact '{filename}' not found in current session"
+            
+        # Check if it's an image for smart renaming
+        mime_type = target_artifact.mime_type or "application/octet-stream"
+        
+        if mime_type.startswith('image/'):
+            # AI-powered filename generation
+            analysis_prompt = f"""Analyze this image and provide a 45-character descriptive filename summary.
+
+Rules:
+1. Describe the main subject, context, or purpose
+2. Use clear, specific terms
+3. Maximum 45 characters
+4. No file extension needed
+5. Focus on what makes this image unique or useful
+
+Provide only the filename description, nothing else."""
+            
+            # Send multimodal analysis request
+            content = types.Content(
+                role="user",
+                parts=[
+                    types.Part(text=analysis_prompt),
+                    types.Part(inline_data=types.Blob(
+                        mime_type=mime_type,
+                        data=target_artifact.data
+                    ))
+                ]
+            )
+            
+            response = await tool_context.send_message(content)
+            
+            if response and response.candidates:
+                ai_summary = response.candidates[0].content.parts[0].text.strip()
+                
+                # Clean and format the summary
+                cleaned_summary = _clean_filename_text(ai_summary, 45)
+                
+                # Generate new filename with proper extension
+                new_filename = _generate_smart_filename(cleaned_summary, mime_type)
+                
+                # Save with new descriptive name
+                new_version = await tool_context.save_artifact(new_filename, target_artifact.data, mime_type)
+                
+                return f"""✅ **Image Analysis & Auto-Rename Complete!**
+
+📁 **Filename Updated:** 
+   • From: `{filename}`
+   • To: `{new_filename}`
+
+📊 **File Details:** {mime_type} • {len(target_artifact.data) / 1024:.1f} KB
+
+🔍 **Analysis Results:**
+{ai_summary[:200]}{'...' if len(ai_summary) > 200 else ''}
+
+Your image has been automatically renamed with a descriptive filename!"""
+        
+        else:
+            # Non-image files - save as-is
+            new_version = await tool_context.save_artifact(filename, target_artifact.data, mime_type)
+            return f"✅ Artifact '{filename}' saved successfully (Version: {new_version})"
+            
+    except Exception as e:
+        return f"❌ Error processing artifact: {str(e)}"
+
+def _clean_filename_text(text: str, max_length: int = 50) -> str:
+    """Clean AI-generated text for use as filename."""
+    # Remove quotes and clean text
+    cleaned = text.strip().strip('"\'')
+    
+    # Replace special characters with underscores
+    cleaned = re.sub(r'[^\w\s-]', '', cleaned)
+    cleaned = re.sub(r'[-\s]+', '_', cleaned)
+    
+    # Convert to lowercase and truncate
+    cleaned = cleaned.lower()[:max_length].strip('_')
+    
+    return cleaned or "unnamed_media"
+
+def _generate_smart_filename(summary: str, mime_type: str) -> str:
+    """Generate filename with proper extension based on MIME type."""
+    extension_map = {
+        'image/jpeg': '.jpg',
+        'image/png': '.png', 
+        'image/gif': '.gif',
+        'image/webp': '.webp',
+        'image/bmp': '.bmp'
+    }
+    
+    extension = extension_map.get(mime_type, '.jpg')
+    return f"{summary}{extension}"
+```
 
 ## 📚 Additional Resources
 

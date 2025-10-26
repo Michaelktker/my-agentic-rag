@@ -18,6 +18,45 @@ python -m app.server
 
 Available at `http://localhost:8000`
 
+## 🚀 Deployment & Infrastructure
+
+### Multi-Environment Setup
+- **Production**: `production-adk` project with manual deployment approval
+- **Staging**: `staging-adk` project with automatic deployment on push to main
+- **Infrastructure**: Terraform-managed GCP resources across both environments
+
+### Key Components
+- **Cloud Run**: Serverless container hosting for ADK agent
+- **Artifact Registry**: Docker image storage and version management
+- **Secret Manager**: Secure storage for GitHub tokens and FAL API keys
+- **Cloud Build**: Automated CI/CD pipeline with staging→production flow
+- **Load Testing**: Automated performance testing using Locust
+
+### Deployment Workflow
+```bash
+# Automatic staging deployment
+git push origin main
+
+# Manual production deployment (after staging validation)
+gcloud builds triggers run deploy-my-agentic-rag \
+  --project=production-adk \
+  --branch=main
+```
+
+## 🧪 Testing & Quality Assurance
+
+### Load Testing
+- **Framework**: Locust with 30-second test runs
+- **Scenarios**: Health checks, chat requests, authentication, response times  
+- **Integration**: Automatic execution after staging deployment
+- **Results**: CSV/HTML reports stored in GCS for analysis
+
+### Performance Metrics
+- **Concurrent Users**: 10 users with 0.5/second ramp-up
+- **Response Time**: Latency measurements across all endpoints
+- **Success Rate**: Request/response success ratio tracking
+- **Error Analysis**: Detailed failure categorization and reporting
+
 ## 📋 Project Overview
 
 ### Purpose
@@ -25,54 +64,130 @@ A production-ready system that combines:
 - **WhatsApp Integration**: Full-featured bot with media support using Baileys
 - **Document Search**: Vertex AI Search for intelligent retrieval
 - **GitHub Integration**: Repository access via Model Context Protocol (MCP) tools
-- **Multimodal AI**: Image, audio, video, and document analysis
-- **Artifact Management**: GCS-based media storage with versioning
-- **Scalable Deployment**: Google Cloud Platform with CI/CD pipeline
+- **Multimodal AI**: Image, audio, video, and document analysis with smart renaming
+- **Artifact Management**: Server-side GCS persistence via ADK tool_context
+- **AI Model Integration**: 100+ fal.ai models accessible via MCP server
+- **Scalable Deployment**: Google Cloud Platform with automated CI/CD pipeline
 
 ### Current Status
 - ✅ **Production Ready**: Deployed to staging and production environments
-- ✅ **WhatsApp Bot**: Full media support with ADK artifact integration
-- ✅ **Image Generation**: Complete Vertex AI Imagen 3.0 integration with WhatsApp delivery
-- ✅ **fal.ai MCP Integration**: ✅ **FULLY OPERATIONAL** - FastMCP `**kwargs` compatibility resolved, 100+ AI models accessible
-- ✅ **Multimodal AI**: Text, image analysis, audio/video processing, and document handling
-- ✅ **CI/CD Pipeline**: Automated deployments with manual production approval
-- ✅ **Security**: GitHub tokens managed via Google Secret Manager
-- ✅ **Monitoring**: Cloud Logging, Tracing, and observability enabled
-- ✅ **Artifact Management**: Fully operational cross-platform artifact system
-- ✅ **Architectural Stability**: Resolved all duplicate service and path compatibility issues
+- ✅ **WhatsApp Bot**: Full media support with mention-based activation (@Myker)
+- ✅ **Smart Media Processing**: AI-powered image renaming and artifact management
+- ✅ **fal.ai MCP Integration**: 100+ AI models via dynamic model discovery
+- ✅ **Polling Agent Architecture**: Handles long-running operations (video generation)
+- ✅ **Simplified Architecture**: Removed client-side GCS operations, server-side only
+- ✅ **Multimodal AI**: Text, image analysis, audio/video processing, document conversion
+- ✅ **CI/CD Pipeline**: Automated staging deployments, manual production approval
+- ✅ **Security**: GitHub tokens and FAL API keys via Google Secret Manager
+- ✅ **Monitoring**: Cloud Logging, Tracing, and comprehensive observability
+- ✅ **Load Testing**: Automated performance testing in CI/CD pipeline
 
-**Latest Updates (October 2025)**:
-- � **FAL MCP `**kwargs` Compatibility Fix**: ✅ **RESOLVED** - Successfully fixed FastMCP compatibility by removing problematic `**kwargs` functions following am0y/mcp-fal patterns
-- 🚀 **fal.ai MCP Integration**: Fully operational with 100+ AI models via Model Context Protocol with proper ADK agent architecture
-- 🔧 **MCP Server Stability**: FastMCP framework now works seamlessly with generic `generate()` function instead of specialized `**kwargs` functions
-- 🎨 **Image Generation**: End-to-end image creation using Imagen 3.0 with direct WhatsApp delivery
-- 🔗 **make_artifact_public Tool**: Function that converts ADK artifacts to raw images with public GCS URLs for fal.ai integration
-- 🖼️ **Image Display Fix**: Resolved binary data issue - artifacts now display properly as images instead of JSON data
-- 🔐 **Secret Manager Integration**: Automatic FAL_KEY retrieval from Google Secret Manager for seamless production deployment
-- 🗂️ **Artifact Version Fix**: Resolved "invalid literal for int() with base 10: 'v1'" error with intelligent filename processing
-- 🔧 **MCP Architecture**: Resolved `MCPToolset` stdio configuration with `StdioConnectionParams` and `StdioServerParameters`
-- 🧠 **Advanced AI Models**: Access to FLUX, video generation, upscaling, and style transfer through fal.ai
-- 🔧 **Server Stability**: Fixed asyncio session issues, MCP path configuration, and agent tool execution
-- 📱 **WhatsApp Integration**: Seamless image delivery with proper Baileys format support
-- 🚀 **Performance**: Optimized artifact processing with session-scoped storage paths
-- 🛠️ **Architecture Fix**: Resolved duplicate artifact service instantiation issues
-- 🗂️ **Path Compatibility**: Fixed path structure mismatch between WhatsApp bot and ADK Runner
-- ✅ **Production Stability**: Comprehensive testing confirms all systems working - health checks passing, tool execution verified, public URLs accessible
-- 🐳 **Deployment Ready**: Fixed Docker configuration, MCP paths, and environment variables for production deployment
+### Key Features (October 2025)
+
+#### **🤖 Intelligent Agent System**
+- **Mention Activation**: Bot only responds to @Myker mentions for focused interactions
+- **Smart Media Renaming**: AI-powered descriptive filenames for uploaded media
+- **Cross-Session Artifacts**: Persistent media storage with version management
+- **Tool Integration**: Seamless ADK tool execution for complex workflows
+
+#### **🎨 AI Content Generation**
+- **Dynamic Model Discovery**: User-driven selection from 100+ fal.ai models
+- **Video Generation**: 2-5 minute processing with polling agent architecture
+- **Image Generation**: FLUX, SDXL, and other advanced models
+- **Image Editing**: Professional-grade AI enhancement and modification
+- **Public Artifact URLs**: Automatic GCS URL generation for external integration
+
+#### **📱 WhatsApp Bot Features**
+- **Multimodal Support**: Images, videos, audio, documents (DOCX/XLSX conversion)
+- **Media Processing**: Automatic download, format conversion, and base64 encoding
+- **Artifact Integration**: Server-side persistence via ADK tool_context
+- **Error Handling**: Graceful fallbacks and user-friendly error messages
+- **Session Management**: GCS-based auth state with automatic cleanup
+
+#### **🔧 Technical Architecture**
+- **Simplified GCS Operations**: Removed ~580 lines of redundant client-side code
+- **ADK-Native Patterns**: Uses tool_context.save_artifact() for all persistence
+- **MCP Integration**: Model Context Protocol server for external AI services
+- **Polling Strategy**: Smart timeout handling for long-running operations
+- **Health Monitoring**: Automated endpoint checks and status reporting
 
 ## 🏗️ Architecture
 
+### System Overview
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    WhatsApp ADK Bot System                          │
+│                WhatsApp ADK Bot System (Simplified)                │
 ├─────────────────────────────────────────────────────────────────────┤
-│  WhatsApp ↔ Baileys ↔ Node.js Bot ↔ Google ADK Service             │
-│                         ↕                                           │
-│  Google Cloud Storage ← Artifacts & Auth State                     │
-│                         ↕                                           │
-│  ADK Agent ↔ GitHub MCP Tools ↔ Vertex AI Search                   │
-│       ↕            ↕                                                │
-│  Polling Agent ← fal.ai MCP Server ↔ 100+ AI Models               │
+│  WhatsApp ↔ Baileys ↔ Node.js Bot → Google ADK Service             │
+│                         │                    ↕                     │
+│                         │         ADK Agent (tool_context)         │
+│                         │              ↕         ↕                 │
+│                   Auth State    GCS Artifacts  AI Tools            │
+│                                      ↕            ↕                 │
+│                              Smart Renaming  GitHub MCP             │
+│                                      ↕            ↕                 │
+│                              Polling Agent ← fal.ai MCP             │
+│                                      ↕            ↕                 │
+│                               100+ AI Models  Vertex Search         │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Architectural Decisions
+
+#### **Simplified Media Pipeline**
+- **Before**: Dual GCS operations (client + server saves)
+- **After**: Server-side only via ADK tool_context (~580 lines removed)
+- **Benefits**: Reduced complexity, single source of truth, better performance
+
+#### **Polling Agent Pattern**
+- **Challenge**: ADK 120-second timeout vs 2-5 minute video generation
+- **Solution**: Smart polling with user guidance messages
+- **Implementation**: Quick checks for images, guidance for videos
+
+#### **Mention-Based Activation**
+- **Pattern**: @Myker mention detection with callback system
+- **Benefits**: Focused interactions, reduced noise, group chat friendly
+- **Processing**: Pre-agent filtering with message cleaning
+
+#### **Dynamic Model Discovery**
+- **Approach**: User-driven model selection instead of hardcoded lists
+- **Catalog**: search() and models() tools for real-time discovery
+- **Future-proof**: Automatic access to new fal.ai models
+
+### Component Details
+
+#### **WhatsApp Bot (Node.js + Baileys)**
+- **Media Handling**: Downloads, converts (XLSX/DOCX→text), base64 encoding
+- **Authentication**: GCS-based auth state with session persistence
+- **Format Compliance**: ADK-standard inline_data with mime_type
+- **Error Handling**: Graceful fallbacks and user-friendly messages
+
+#### **ADK Agent (Python)**
+- **Core Tools**: 
+  - `rename_and_save_media_artifact`: AI-powered smart renaming
+  - `list_user_artifacts`: Cross-session artifact discovery
+  - `make_artifact_public`: GCS URL generation for external services
+  - `poll_fal_operation`: Long-running operation management
+- **MCP Integration**: GitHub repos, fal.ai models via Model Context Protocol
+- **Artifact Management**: tool_context.save_artifact() for all persistence
+
+#### **fal.ai MCP Server**
+- **Models**: 100+ AI models via dynamic discovery (generate, search, schema)
+- **Queue Management**: status(), result(), cancel() for long operations
+- **File Operations**: upload() to fal.ai CDN for model inputs
+- **Integration**: FastMCP framework with stdio communication
+
+#### **Polling Agent**
+- **Smart Strategy**: 20 attempts for images, 3 for videos with guidance
+- **URL Handling**: Proper fal.ai status URL construction
+- **User Experience**: Clear wait time expectations and check-back instructions
+- **Error Resilience**: HTTP status handling and graceful fallbacks
+
+#### **Data Pipeline**
+- **Ingestion**: Automated Vertex AI Search data loading with chunking
+- **Processing**: Embedding generation and datastore management  
+- **Scheduling**: Terraform-managed infrastructure with CI/CD integration
+- **Monitoring**: Pipeline status tracking and error reporting
 │    (Smart         (FLUX, Video, Upscaling, Image Generation)       │
 │   Timeouts)                                                         │
 └─────────────────────────────────────────────────────────────────────┘

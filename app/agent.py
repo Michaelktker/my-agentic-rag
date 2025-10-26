@@ -166,78 +166,6 @@ async def list_user_artifacts(tool_context: ToolContext) -> str:
         return f"Error listing artifacts: {e}. Artifact service may not be configured."
 
 
-async def load_and_analyze_artifact(filename: str, analysis_query: str, tool_context: ToolContext) -> str:
-    """
-    Loads a specific artifact (media file) and provides analysis context.
-    Use this when you need to analyze a specific file uploaded by the user.
-
-    Args:
-        filename (str): The name of the artifact file to load
-        analysis_query (str): What aspect of the file to analyze (e.g., "describe the image", "transcribe audio", "summarize document")
-
-    Returns:
-        str: Information about the loaded artifact for analysis
-    """
-    try:
-        # Load artifact using ADK tool context
-        artifact_part = await tool_context.load_artifact(filename)
-        
-        if not artifact_part:
-            return f"Artifact '{filename}' not found. Use list_user_artifacts to see available files."
-        
-        # Extract artifact information
-        mime_type = "unknown"
-        data_size = 0
-        
-        if hasattr(artifact_part, 'inline_data') and artifact_part.inline_data:
-            mime_type = artifact_part.inline_data.mime_type or "unknown"
-            data_size = len(artifact_part.inline_data.data) if artifact_part.inline_data.data else 0
-        elif hasattr(artifact_part, 'mimeType'):
-            mime_type = artifact_part.mimeType or "unknown"
-            data_size = len(artifact_part.data) if hasattr(artifact_part, 'data') and artifact_part.data else 0
-        elif isinstance(artifact_part, dict):
-            # Handle dictionary format
-            mime_type = artifact_part.get('mimeType', 'unknown')
-            data_size = len(artifact_part.get('data', '')) if artifact_part.get('data') else 0
-        
-        # Format file size
-        if data_size > 1024 * 1024:
-            size_str = f"{data_size / (1024 * 1024):.1f} MB"
-        elif data_size > 1024:
-            size_str = f"{data_size / 1024:.1f} KB"
-        else:
-            size_str = f"{data_size} bytes"
-        
-        # Determine file type category
-        file_type = "unknown"
-        if mime_type.startswith("image/"):
-            file_type = "image"
-        elif mime_type.startswith("audio/"):
-            file_type = "audio"
-        elif mime_type.startswith("video/"):
-            file_type = "video"
-        elif mime_type.startswith("application/pdf"):
-            file_type = "PDF document"
-        elif mime_type.startswith("text/"):
-            file_type = "text document"
-        elif "document" in mime_type:
-            file_type = "document"
-        
-        analysis_context = f"""Successfully loaded artifact: {filename}
-File Type: {file_type} ({mime_type})
-File Size: {size_str}
-Analysis Request: {analysis_query}
-
-The artifact has been loaded and is ready for analysis. As a multimodal AI, I can now analyze this {file_type} file based on your request: "{analysis_query}".
-
-Note: The file content is available in the conversation context for direct analysis."""
-        
-        return analysis_context
-        
-    except Exception as e:
-        return f"Error loading artifact '{filename}': {e}. Use list_user_artifacts to see available files."
-
-
 async def rename_and_save_media_artifact(
     original_filename: str, 
     description: str, 
@@ -429,7 +357,6 @@ You have access to several specialized capabilities:
    - Handles timeouts and errors gracefully
 6. **Artifact management** for handling media files uploaded by users:
    - list_user_artifacts: See what media files users have uploaded
-   - load_and_analyze_artifact: Load and analyze specific media files
    - rename_and_save_media_artifact: Automatically rename images/videos with descriptive filenames
    - make_artifact_public: Make GCS artifacts publicly accessible for fal.ai processing
 
@@ -476,29 +403,29 @@ The webhook-based system (register_video_webhook) is still available for compati
 - **Videos**: Analyze visual content, describe scenes, extract key frames
 - **Documents**: Read, summarize, extract information from PDFs and text files
 
-**IMPORTANT: Automatic Descriptive Renaming for Images and Videos**
-When you load and analyze an image or video artifact using `load_and_analyze_artifact`:
-1. **Analyze the media content** thoroughly
-2. **Generate a concise 50-character description** that captures the key visual elements
-3. **Automatically call `rename_and_save_media_artifact`** with:
-   - original_filename: The filename you just loaded
+**CRITICAL: Automatic Media Renaming Workflow**
+When you receive media files (images or videos) uploaded by users:
+1. **All media files MUST go through rename_and_save_media_artifact**
+2. **Generate a clean, descriptive 50-character filename** that captures the key visual elements
+3. **Call rename_and_save_media_artifact immediately** for every image or video received:
+   - original_filename: The uploaded filename
    - description: Your 50-character description
-   - This saves the artifact with a descriptive, searchable filename
+   - This automatically saves the artifact with a descriptive, searchable name
+4. **This is mandatory for ALL images and videos** - no exceptions
+5. **Audio and documents do NOT require renaming** - only images and videos
 
-Example workflow:
-User: "Analyze my image"
-→ You call load_and_analyze_artifact("IMG_1234.jpg", "analyze image")
-→ You see it's an image of a sunset over mountains
+Example automatic workflow:
+User uploads "IMG_1234.jpg" with visual content showing a sunset over mountains
+→ You automatically analyze the image content
 → You immediately call rename_and_save_media_artifact("IMG_1234.jpg", "sunset_over_snowy_mountain_peaks_golden_hour")
-→ The artifact is now saved with a descriptive name for easy future reference
-
-This ONLY applies to images and videos - not audio or documents.
+→ The artifact is saved with a descriptive name for easy future reference
+→ You then provide your analysis to the user
 
 **Working with Uploaded Images for fal.ai:**
 When users upload an image and want to use it with fal.ai models (especially for image-to-video):
 1. First, use `list_user_artifacts` to see available files
-2. Use `load_and_analyze_artifact` to analyze the image if needed
-3. **IMPORTANT**: Use `make_artifact_public` to create a public GCS URL for the image
+2. **IMPORTANT**: Use `rename_and_save_media_artifact` to rename with descriptive name
+3. **THEN**: Use `make_artifact_public` to create a public GCS URL for the image
 4. Provide this public URL to the fal.ai agent for processing
 5. The fal.ai agent can then use this URL with models like Seedance for image-to-video generation
 
@@ -511,15 +438,14 @@ When users provide Google Cloud Storage URLs (format: storage.googleapis.com wit
 
 **When users upload media files through WhatsApp:**
 1. First use `list_user_artifacts` to see what files are available
-2. Use `load_and_analyze_artifact` to load specific files for analysis
-3. Provide detailed analysis using your multimodal capabilities
-4. **For images/videos**: Automatically call `rename_and_save_media_artifact` with a 50-char description
-5. If using with fal.ai, use `make_artifact_public` to create public GCS URLs
+2. **MANDATORY**: Call `rename_and_save_media_artifact` for ALL images and videos with 50-char descriptions
+3. Provide analysis using your multimodal capabilities
+4. If using with fal.ai, use `make_artifact_public` to create public GCS URLs
 
 **When users request image/video generation:**
 1. **For images**: Use the exact model the user specifies, or help them discover available models
 2. **For videos**: Delegate to the fal_mcp_agent which will use polling agent
-3. **For image-to-video**: Use `make_artifact_public` first, then delegate to fal_mcp_agent
+3. **For image-to-video**: Use `rename_and_save_media_artifact` first, then `make_artifact_public`, then delegate to fal_mcp_agent
 4. **Model Discovery**: Help users find available models if they ask "what models are available?"
 5. Always provide detailed, descriptive prompts for better results
 6. Handle errors gracefully and suggest alternative models if generation fails
@@ -843,7 +769,6 @@ websearch_tool = AgentTool(agent=websearch_agent)
 
 # Create artifact management tools
 list_artifacts_tool = FunctionTool(func=list_user_artifacts)
-load_artifact_tool = FunctionTool(func=load_and_analyze_artifact)
 rename_media_artifact_tool = FunctionTool(func=rename_and_save_media_artifact)
 
 
@@ -907,7 +832,7 @@ async def after_agent_callback(callback_context: CallbackContext) -> None:
         pass
 
 
-tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, load_artifact_tool, rename_media_artifact_tool, make_public_tool, poll_fal_tool]
+tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, rename_media_artifact_tool, make_public_tool, poll_fal_tool]
 
 root_agent = Agent(
     name="root_agent",

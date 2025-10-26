@@ -25,7 +25,7 @@ try {
 const ADK_URL = process.env.ADK_URL || config.adk.url; // Keep for backward compatibility
 const ADK_APP_NAME = process.env.ADK_APP_NAME || config.adk.appName;
 const BUCKET_NAME = process.env.BUCKET_NAME || config.gcs.bucketName;
-const ARTIFACTS_BUCKET_NAME = process.env.ARTIFACTS_BUCKET_NAME || config.gcs.artifactsBucketName;
+// Note: ARTIFACTS_BUCKET_NAME removed - artifact persistence now handled server-side by ADK
 const PROJECT_ID = process.env.PROJECT_ID || config.gcs.projectId;
 
 // ADK Endpoint Configuration with fallback
@@ -41,10 +41,10 @@ console.log(`📍 Localhost ADK URL: ${LOCALHOST_ADK_URL}`);
 console.log(`🏥 Health check timeout: ${HEALTH_CHECK_TIMEOUT}ms`);
 console.log(`📱 App Name: ${ADK_APP_NAME}`);
 
-// Initialize Google Cloud Storage
+// Initialize Google Cloud Storage for session management only
 const storage = new Storage({ projectId: PROJECT_ID });
 const bucket = storage.bucket(BUCKET_NAME);
-const artifactsBucket = storage.bucket(ARTIFACTS_BUCKET_NAME);
+// Note: artifactsBucket removed - artifact operations now handled server-side by ADK
 
 // Logger configuration
 const logger = P({
@@ -241,273 +241,13 @@ class GCSAuthState {
 }
 
 /**
- * GCS Artifact Service for ADK artifact management
- * Implements artifact storage following ADK format requirements
- */
-class GcsArtifactService {
-    constructor() {
-        this.bucketName = ARTIFACTS_BUCKET_NAME;
-        this.artifactsFolder = config.gcs.artifactsFolder;
-        this.storage = storage;
-        this.bucket = artifactsBucket;
-    }
-
-    /**
-     * Generate artifact path: {appName}/{userId}/shared/{filename}
-     * Changed from session-based to user-based storage for persistent access
-     * All artifacts for a user are stored in a 'shared' folder under their user ID
-     */
-    getArtifactPath(appName, userId, filename, sessionId = 'shared') {
-        // Use user-based path: app/userId/shared/filename (ignore sessionId for persistence)
-        return `${appName}/${userId}/shared/${filename}`;
-    }
-
-    /**
-     * Save artifact to GCS and return version number
-     * Now uses user-based storage (all artifacts stored under userId/shared/)
-     */
-    async saveArtifact(appName, userId, filename, part, sessionId = 'shared') {
-        try {
-            // Use user-based path (sessionId is ignored for user-scoped storage)
-            const artifactPath = this.getArtifactPath(appName, userId, filename, 'shared');
-            
-            // Convert Part object to storage format
-            const artifactData = {
-                mimeType: part.mimeType || part.inline_data?.mime_type || 'application/octet-stream',
-                data: part.data || part.inline_data?.data,
-                timestamp: new Date().toISOString(),
-                filename: filename
-            };
-
-            // Get existing versions to determine next version number
-            const versions = await this.listVersions(appName, userId, filename, sessionId);
-            const nextVersion = versions.length > 0 ? Math.max(...versions) + 1 : 1;
-            
-            const versionedPath = `${artifactPath}/v${nextVersion}`;
-            
-            // Save artifact data as JSON
-            const fileBuffer = Buffer.from(JSON.stringify(artifactData, this.bufferJSONReplacer, 2));
-            
-            await this.bucket.file(versionedPath).save(fileBuffer, {
-                metadata: {
-                    contentType: 'application/json',
-                    customMetadata: {
-                        artifactVersion: nextVersion.toString(),
-                        originalMimeType: artifactData.mimeType,
-                        filename: filename
-                    }
-                }
-            });
-
-            logger.info(`Saved artifact ${filename} v${nextVersion} for user ${userId}`);
-            return nextVersion;
-            
-        } catch (error) {
-            logger.error(`Error saving artifact ${filename}:`, error);
-            throw error;
-        }
-    }
-
-    /**
-     * Load artifact from GCS (latest version if no version specified)
-     * Now uses user-based storage (loads from userId/shared/)
-     */
-    async loadArtifact(appName, userId, filename, version = null, sessionId = 'shared') {
-        try {
-            // Use user-based path (sessionId is ignored for user-scoped storage)
-            const artifactPath = this.getArtifactPath(appName, userId, filename, 'shared');
-            
-            let targetVersion = version;
-            if (!targetVersion) {
-                // Get latest version
-                const versions = await this.listVersions(appName, userId, filename, sessionId);
-                if (versions.length === 0) {
-                    return null;
-                }
-                targetVersion = Math.max(...versions);
-            }
-
-            const versionedPath = `${artifactPath}/v${targetVersion}`;
-            const file = this.bucket.file(versionedPath);
-            
-            const [exists] = await file.exists();
-            if (!exists) {
-                return null;
-            }
-
-            const [data] = await file.download();
-            const artifactData = JSON.parse(data.toString(), this.bufferJSONReviver);
-            
-            // Return in ADK Part format
-            return {
-                inline_data: {
-                    mime_type: artifactData.mimeType,
-                    data: artifactData.data
-                },
-                mimeType: artifactData.mimeType,
-                data: artifactData.data
-            };
-            
-        } catch (error) {
-            logger.error(`Error loading artifact ${filename}:`, error);
-            return null;
-        }
-    }
-
-    /**
-     * Test GCS connectivity and authentication
-     */
-    async testGCSConnection() {
-        try {
-            logger.info('Testing GCS connection...');
-            const [files] = await this.bucket.getFiles({ maxResults: 1 });
-            logger.info(`GCS connection successful. Found ${files.length} files in bucket.`);
-            return true;
-        } catch (error) {
-            logger.error('GCS connection failed:', error.message);
-            logger.error('Error details:', error);
-            return false;
-        }
-    }
-
-    /**
-     * Load artifact from GCS for a user (now uses user-based storage)
-     */
-    async loadArtifactByUser(appName, userId, filename, version = null) {
-        try {
-            // First test GCS connectivity
-            logger.info('Testing GCS connection before artifact loading...');
-            const isConnected = await this.testGCSConnection();
-            if (!isConnected) {
-                logger.error('GCS connection test failed - aborting artifact load');
-                return null;
-            }
-            
-            // Load using user-based storage
-            return await this.loadArtifact(appName, userId, filename, version, 'shared');
-            
-        } catch (error) {
-            logger.error(`Error loading user artifact ${filename}:`, error);
-            return null;
-        }
-    }
-
-    /**
-     * Load artifact from GCS by session ID (DEPRECATED - kept for compatibility)
-     * @deprecated Use loadArtifactByUser instead for user-scoped storage
-     */
-    async loadArtifactBySession(appName, userId, sessionId, filename, version = 0) {
-        try {
-            logger.warn('loadArtifactBySession is deprecated, using user-based storage instead');
-            // Redirect to user-based loading
-            return await this.loadArtifactByUser(appName, userId, filename, version);
-            
-        } catch (error) {
-            logger.error(`Error in deprecated loadArtifactBySession for ${filename}:`, error);
-            return null;
-        }
-    }
-
-    /**
-     * List all versions for an artifact
-     * Now uses user-based storage (lists from userId/shared/)
-     */
-    async listVersions(appName, userId, filename, sessionId = 'shared') {
-        try {
-            // Use user-based path (sessionId is ignored for user-scoped storage)
-            const artifactPath = this.getArtifactPath(appName, userId, filename, 'shared');
-            const [files] = await this.bucket.getFiles({
-                prefix: `${artifactPath}/v`
-            });
-
-            const versions = files
-                .map(file => {
-                    const match = file.name.match(/\/v(\d+)$/);
-                    return match ? parseInt(match[1]) : null;
-                })
-                .filter(v => v !== null)
-                .sort((a, b) => a - b);
-
-            return versions;
-        } catch (error) {
-            logger.error(`Error listing versions for ${filename}:`, error);
-            return [];
-        }
-    }
-
-    /**
-     * List all artifact filenames for a user
-     * Now uses user-based storage (lists from userId/shared/)
-     */
-    async listArtifactKeys(appName, userId) {
-        try {
-            // Use user-based path: app/userId/shared/
-            const userPath = `${appName}/${userId}/shared/`;
-            const [files] = await this.bucket.getFiles({
-                prefix: userPath
-            });
-
-            const filenames = new Set();
-            files.forEach(file => {
-                // Extract filename from path: app/userId/shared/filename/v1 -> filename
-                const relativePath = file.name.substring(userPath.length);
-                const pathParts = relativePath.split('/');
-                if (pathParts.length >= 2 && pathParts[1].startsWith('v')) {
-                    filenames.add(pathParts[0]);
-                }
-            });
-
-            return Array.from(filenames).sort();
-        } catch (error) {
-            logger.error(`Error listing artifacts for user ${userId}:`, error);
-            return [];
-        }
-    }
-
-    /**
-     * Delete all versions of an artifact
-     * Now uses user-based storage (deletes from userId/shared/)
-     */
-    async deleteArtifact(appName, userId, filename) {
-        try {
-            // Use user-based path (no sessionId needed)
-            const artifactPath = this.getArtifactPath(appName, userId, filename, 'shared');
-            const [files] = await this.bucket.getFiles({
-                prefix: `${artifactPath}/`
-            });
-
-            const deletePromises = files.map(file => file.delete());
-            await Promise.all(deletePromises);
-            
-            logger.info(`Deleted artifact ${filename} for user ${userId}`);
-        } catch (error) {
-            logger.error(`Error deleting artifact ${filename}:`, error);
-            throw error;
-        }
-    }
-
-    // Buffer JSON handling for proper serialization (reuse from GCSAuthState)
-    bufferJSONReplacer(key, value) {
-        if (value?.type === 'Buffer' && Array.isArray(value?.data)) {
-            return { __buffer_type: true, data: value.data };
-        }
-        return value;
-    }
-
-    bufferJSONReviver(key, value) {
-        if (value?.__buffer_type) {
-            return Buffer.from(value.data);
-        }
-        return value;
-    }
-}
-
-/**
  * Media File Handler for WhatsApp messages
+ * Simplified to only process media without client-side GCS operations
+ * All artifact management is handled server-side by ADK
  */
 class MediaHandler {
-    constructor(artifactService) {
-        this.artifactService = artifactService;
+    constructor() {
+        // No artifactService needed - ADK handles all persistence
     }
 
     /**
@@ -626,21 +366,11 @@ class MediaHandler {
                     data: Buffer.from(textContent)
                 };
 
-                // Save artifact with converted content
-                const version = await this.artifactService.saveArtifact(
-                    ADK_APP_NAME,
-                    userId,
-                    filename.replace('.xlsx', '.txt'), // Change extension to .txt
-                    part,
-                    sessionId
-                );
-
-                logger.info(`Processed XLSX file as text: ${filename} -> ${filename.replace('.xlsx', '.txt')} (text/plain) v${version} for user ${userId}`);
+                logger.info(`Processed XLSX file as text: ${filename} -> ${filename.replace('.xlsx', '.txt')} (text/plain) for user ${userId}`);
                 
                 return {
                     filename: filename.replace('.xlsx', '.txt'),
                     mimeType: 'text/plain',
-                    version,
                     part,
                     converted: true,
                     originalFormat: 'XLSX'
@@ -663,21 +393,11 @@ class MediaHandler {
                     data: Buffer.from(textContent)
                 };
 
-                // Save artifact with converted content
-                const version = await this.artifactService.saveArtifact(
-                    ADK_APP_NAME,
-                    userId,
-                    filename.replace('.docx', '.txt'), // Change extension to .txt
-                    part,
-                    sessionId
-                );
-
-                logger.info(`Processed DOCX file as text: ${filename} -> ${filename.replace('.docx', '.txt')} (text/plain) v${version} for user ${userId}`);
+                logger.info(`Processed DOCX file as text: ${filename} -> ${filename.replace('.docx', '.txt')} (text/plain) for user ${userId}`);
                 
                 return {
                     filename: filename.replace('.docx', '.txt'),
                     mimeType: 'text/plain',
-                    version,
                     part,
                     converted: true,
                     originalFormat: 'DOCX'
@@ -694,21 +414,11 @@ class MediaHandler {
                 data: buffer
             };
 
-            // Save artifact
-            const version = await this.artifactService.saveArtifact(
-                ADK_APP_NAME,
-                userId,
-                filename,
-                part,
-                sessionId
-            );
-
-            logger.info(`Processed media file: ${filename} (${mimeType}) v${version} for user ${userId}`);
+            logger.info(`Processed media file: ${filename} (${mimeType}) for user ${userId}`);
             
             return {
                 filename,
                 mimeType,
-                version,
                 part
             };
 
@@ -863,8 +573,7 @@ class WhatsAppBot {
         this.sock = null;
         this.authState = new GCSAuthState();
         this.activeSessions = new Map(); // Store user sessions
-        this.artifactService = new GcsArtifactService();
-        this.mediaHandler = new MediaHandler(this.artifactService);
+        this.mediaHandler = new MediaHandler();
         this.sessionManager = new UserSessionManager();
     }
 
@@ -1101,17 +810,14 @@ class WhatsAppBot {
             // Prepare message for ADK (combine text and media)
             let adkMessage = messageText;
             
-            // If no text provided and media is uploaded, auto-trigger analysis with @Myker
-            if (!messageText && mediaParts.length > 0) {
-                // Check if it's an image or video (for automatic renaming)
-                const hasImageOrVideo = mediaParts.some(media => 
-                    media.mimeType.startsWith('image/') || media.mimeType.startsWith('video/')
-                );
-                
-                if (hasImageOrVideo) {
-                    adkMessage = '@Myker Please analyze this image/video and provide a detailed description.';
+            // Auto-trigger @Myker when media is uploaded
+            if (mediaParts.length > 0) {
+                if (!messageText) {
+                    // Media only: Request renaming
+                    adkMessage = '@Myker I\'ve uploaded a media file to rename_and_save_media_artifact.';
                 } else {
-                    adkMessage = '@Myker I\'ve uploaded a media file for you to analyze.';
+                    // Media + text: Request renaming and public URL, then append user's text
+                    adkMessage = '@Myker I\'ve uploaded a media file to rename_and_save_media_artifact and make_artifact_public. ' + messageText;
                 }
             }
             
@@ -1122,36 +828,57 @@ class WhatsAppBot {
             // }
 
             // Send message to ADK with streaming (including media parts)
+            logger.info(`🚀 Sending to ADK: message="${adkMessage}", mediaParts=${mediaParts.length}, session=${session.sessionId}`);
             const response = await this.sendToADK(adkMessage, session.sessionId, userId, remoteJid, mediaParts);
+            logger.info(`📨 ADK Response received: ${response ? 'Success' : 'No response'}`);
             
             if (response) {
                 // Handle multimodal response (text + images)
                 if (typeof response === 'object' && (response.text || response.images)) {
                     // Send text message if present
                     if (response.text) {
+                        logger.info(`📤 Sending text response to user: ${response.text.substring(0, 100)}...`);
                         await this.sendMessage(remoteJid, response.text);
                     }
                     
                     // Send images if present
                     if (response.images && response.images.length > 0) {
+                        logger.info(`📤 Sending ${response.images.length} images to user`);
                         for (const image of response.images) {
                             await this.sendImage(remoteJid, image);
                         }
                     }
                 } else {
                     // Fallback for text-only responses
+                    logger.info(`📤 Sending fallback text response to user: ${response.substring(0, 100)}...`);
                     await this.sendMessage(remoteJid, response);
                 }
+            } else {
+                logger.info(`ℹ️ No response from ADK, message handling complete`);
             }
 
         } catch (error) {
             logger.error('Error handling incoming message:', error);
-            logger.error('Error stack:', error.stack);
+            logger.error('Error message:', error.message || 'No error message');
+            logger.error('Error name:', error.name || 'No error name');
+            logger.error('Error stack:', error.stack || 'No stack trace');
             logger.error('Error details:', {
                 message: error.message,
                 name: error.name,
-                stack: error.stack
+                stack: error.stack,
+                toString: error.toString(),
+                errorType: typeof error
             });
+            
+            // Send error message to user
+            try {
+                const remoteJid = message?.key?.remoteJid;
+                if (remoteJid) {
+                    await this.sendMessage(remoteJid, '❌ Sorry, I encountered an error processing your message. Please try again.');
+                }
+            } catch (sendError) {
+                logger.error('Failed to send error message to user:', sendError);
+            }
         }
     }
 
@@ -1609,26 +1336,12 @@ class WhatsAppBot {
                     }
 
                     // Check for artifact images in artifactDelta
+                    // NOTE: Artifact loading removed - ADK handles all artifact management server-side
+                    // Images generated by ADK are returned directly in the response
                     if (event.actions && event.actions.artifactDelta) {
-                        const userId = this.getUserIdFromJid(jid);
-                        for (const artifactName in event.actions.artifactDelta) {
-                            // Check if this is an image artifact
-                            if (artifactName.includes('.png') || artifactName.includes('.jpg') || artifactName.includes('.jpeg') || artifactName.includes('.webp')) {
-                                try {
-                                    logger.info(`Fetching image artifact: ${artifactName} for user: ${userId}, session: ${sessionId}`);
-                                    const imageData = await this.artifactService.loadArtifactBySession('app', userId, sessionId, artifactName);
-                                    if (imageData && imageData.data) {
-                                        artifactImages.push({
-                                            mimeType: imageData.mimeType || 'image/png',
-                                            data: imageData.data
-                                        });
-                                        logger.info(`Successfully fetched image artifact: ${artifactName}`);
-                                    }
-                                } catch (error) {
-                                    logger.error(`Error fetching image artifact ${artifactName}:`, error);
-                                }
-                            }
-                        }
+                        logger.info(`ArtifactDelta detected in response - artifacts are managed by ADK server-side`);
+                        // Legacy client-side artifact loading has been removed
+                        // All artifacts are now handled by ADK's tool_context on the server
                     }
                 }
             }

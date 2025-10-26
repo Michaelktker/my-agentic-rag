@@ -301,4 +301,111 @@ gcloud builds list --project=production-adk --limit=10
 
 ---
 
-*This deployment guide reflects the current infrastructure setup and should be updated as the system evolves.*
+## 🗂️ Data Ingestion Pipeline
+
+### Overview
+Automated data ingestion into Vertex AI Search for building Retrieval Augmented Generation (RAG) applications. The pipeline orchestrates the complete workflow: loading data, chunking, generating embeddings, and importing into Vertex AI Search datastore.
+
+### Setup and Execution
+
+#### Prerequisites
+```bash
+# Set project ID environment variable
+export PROJECT_ID="YOUR_PROJECT_ID"
+```
+
+#### Infrastructure Setup
+```bash
+# Deploy development environment with Terraform
+make setup-dev-env
+```
+
+#### Pipeline Execution
+```bash
+# Run data ingestion pipeline
+make data-ingestion
+```
+
+### Pipeline Configuration
+- **Parameters**: Automatically configured based on datastore type
+- **Scheduling**: Supports cron-based periodic execution via `--schedule-only` and `--cron-schedule` flags
+- **Monitoring**: Vertex AI Pipelines dashboard for progress tracking
+- **Dependencies**: Automatic installation via `make install`
+
+### Troubleshooting
+If you encounter `"embedding field path: embedding not found in schema"` error after initial ingestion, wait a few minutes for Vertex AI Search to complete indexing.
+
+## 🧪 Load Testing Framework
+
+### Overview
+Comprehensive load testing using [Locust](https://locust.io/) to measure performance under various load conditions.
+
+### Test Configuration
+- **Framework**: Locust v2.31.1
+- **Duration**: 30-second test runs
+- **Concurrency**: 10 users with 0.5/second ramp-up rate
+- **Scenarios**: Health checks, chat requests, authentication, response time measurements
+
+### Local Testing
+```bash
+# Install Locust
+pip install locust==2.31.1
+
+# Run against staging with web UI
+locust -f tests/load_test/load_test.py -H https://your-staging-url
+
+# Headless execution
+locust -f tests/load_test/load_test.py --headless \
+  -H https://your-staging-url -t 30s -u 10 -r 0.5
+```
+
+### CI/CD Integration
+Load tests execute automatically after successful staging deployment:
+1. **Trigger**: Post-deployment validation
+2. **Results**: CSV/HTML reports stored in GCS
+3. **Metrics**: Request/response times, success rates, throughput analysis
+4. **Validation**: Performance regression detection
+
+### Results Analysis
+Test outputs include:
+- **Performance Metrics**: Latency percentiles and throughput measurements
+- **Success Rates**: Request success/failure ratios  
+- **Error Analysis**: Detailed failure categorization
+- **Trend Analysis**: Performance comparison across deployments
+
+## 📋 Infrastructure Components
+
+### Terraform Configuration Summary
+```
+deployment/terraform/          # Production infrastructure
+├── apis.tf                   # Google Cloud API enablement
+├── backend.tf                # Terraform state management
+├── build_triggers.tf         # CI/CD pipeline configuration  
+├── github.tf                 # GitHub integration setup
+├── iam.tf                    # Service accounts and permissions
+├── service.tf                # Cloud Run service configuration
+├── storage.tf                # GCS buckets and data stores
+└── vars/env.tfvars          # Production environment variables
+
+deployment/terraform/dev/      # Staging infrastructure  
+├── apis.tf                   # Development API configuration
+├── backend.tf                # Dev state management
+├── iam.tf                    # Dev IAM configuration
+├── service.tf                # Dev Cloud Run setup
+├── storage.tf                # Dev storage configuration
+└── vars/env.tfvars          # Staging environment variables
+```
+
+### Service Dependencies
+- **Cloud Run**: Serverless ADK agent hosting with automatic scaling
+- **Artifact Registry**: Multi-region Docker image storage and management
+- **Secret Manager**: Encrypted storage for GitHub PAT and FAL API keys
+- **Cloud Build**: GitOps-based CI/CD with manual production approval
+- **Vertex AI Search**: RAG backend with embedding generation and search
+- **Cloud Storage**: Session state, artifacts, and test results persistence
+- **Cloud Logging**: Centralized logging with structured log analysis
+- **IAM**: Principle of least privilege with service account isolation
+
+---
+
+*This deployment guide provides comprehensive infrastructure management for production-ready WhatsApp ADK bot deployment with automated testing, monitoring, and data pipeline integration.*
