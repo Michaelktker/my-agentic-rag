@@ -14,9 +14,9 @@ def register_model_tools(mcp: FastMCP):
     """Register model-related tools with the MCP server."""
     
     @mcp.tool()
-    async def models(page: Optional[int] = None, total: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def models(page: int, total: int) -> List[Dict[str, Any]]:
         """
-        List available models on fal.ai. Ensure to use the total and page arguments. Avoid listing all the models at once.
+        List available models on fal.ai. 
         
         Args:
             page: The page number of models to retrieve (pagination)
@@ -27,14 +27,8 @@ def register_model_tools(mcp: FastMCP):
         """
         url = f"{FAL_BASE_URL}/models"
         
-        params = {}
-        if page is not None:
-            params["page"] = page
-        if total is not None:
-            params["total"] = total
-        
-        if params:
-            url += "?" + "&".join(f"{k}={v}" for k, v in params.items())
+        params = {"page": page, "total": total}
+        url += "?" + "&".join(f"{k}={v}" for k, v in params.items())
         
         result = await public_request(url)
         

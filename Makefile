@@ -11,6 +11,7 @@ playground:
 	@echo "|                                                                             |"
 	@echo "| 🔍 IMPORTANT: Select the 'app' folder to interact with your agent.          |"
 	@echo "==============================================================================="
+	FAL_KEY="14fcfa4a-1f68-4e1f-ac71-75088668eeac:ab3d5f08a5f11e46b820aa729748027e" \
 	uv run adk web . --port 8501 --reload_agents
 
 # Deploy the agent remotely
@@ -32,6 +33,7 @@ backend:
 
 # Launch local development server with hot-reload
 local-backend:
+	FAL_KEY="14fcfa4a-1f68-4e1f-ac71-75088668eeac:ab3d5f08a5f11e46b820aa729748027e" \
 	uv run uvicorn app.server:app --host 0.0.0.0 --port 8000 --reload
 
 # Set up development environment resources using Terraform

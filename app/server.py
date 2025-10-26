@@ -13,9 +13,17 @@
 # limitations under the License.
 
 import os
+import asyncio
+import json
+from typing import Dict, Any
+from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 import google.auth
-from fastapi import FastAPI
+from fastapi import FastAPI, BackgroundTasks, Request
 from google.adk.cli.fast_api import get_fast_api_app
 from google.cloud import logging as google_cloud_logging
 from opentelemetry import trace
@@ -25,7 +33,6 @@ from vertexai import agent_engines
 from app.utils.gcs import create_bucket_if_not_exists
 from app.utils.tracing import CloudTraceLoggingSpanExporter
 from app.utils.typing import Feedback
-from app.webhook_handler import add_webhook_routes
 
 # Deployment test - October 3, 2025 08:40 UTC
 _, project_id = google.auth.default()
@@ -67,18 +74,28 @@ AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Use in-memory session service for dev/testing
 # session_service_uri = f"agentengine://{agent_engine.resource_name}"
 
-app: FastAPI = get_fast_api_app(
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle startup and shutdown events for the FastAPI app."""
+    # Startup
+    print("🚀 FastAPI server starting up...")
+    
+    yield
+    
+    # Shutdown
+    print("🛑 FastAPI server shutting down...")
+
+
+# Create the FastAPI app using ADK's get_fast_api_app
+app = get_fast_api_app(
     agents_dir=AGENT_DIR,
-    web=True,
-    artifact_service_uri=artifacts_bucket_uri,
+    session_service_uri="sqlite:///./sessions.db",
     allow_origins=allow_origins,
-    # session_service_uri=session_service_uri,  # Comment out for dev testing
+    web=True,
 )
 app.title = "my-agentic-rag"
 app.description = "API for interacting with the Agent my-agentic-rag"
-
-# Add webhook routes for async task callbacks
-add_webhook_routes(app)
 
 
 @app.get("/health")
@@ -128,9 +145,3 @@ def collect_feedback(feedback: Feedback) -> dict[str, str]:
     return {"status": "success"}
 
 
-# Main execution
-# Deployment Test: Full CI/CD pipeline test - October 3, 2025 13:45 UTC
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8000)
