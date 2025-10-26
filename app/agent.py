@@ -195,8 +195,30 @@ async def save_inline_media_as_artifact(
         # Look for inline_data in the message parts
         saved_count = 0
         for part in user_content.parts:
+            logger.info(f"Checking part: type={type(part).__name__}, attributes={dir(part)}")
+            
+            # Check if this is a blob directly (ADK might pass blobs instead of inline_data)
+            if hasattr(part, 'data') and hasattr(part, 'mime_type'):
+                # This is likely a Blob object
+                mime_type = part.mime_type
+                blob_data = part.data
+                
+                logger.info(f"Found Blob: mime_type={mime_type}, data_length={len(blob_data) if blob_data else 0}")
+                
+                # Create a new Part with inline_data structure
+                inline_data = types.Blob(mime_type=mime_type, data=blob_data)
+                artifact_part = types.Part(inline_data=inline_data)
+                
+                # Save as artifact using tool_context
+                version = await tool_context.save_artifact(filename, artifact_part)
+                saved_count += 1
+                
+                logger.info(f"Saved Blob as artifact: {filename} (version: {version})")
+                
+                return f"✅ Successfully saved media as artifact: {filename} (MIME: {mime_type}, Version: {version})"
+            
             # Check if this part has inline_data attribute
-            if hasattr(part, 'inline_data') and part.inline_data:
+            elif hasattr(part, 'inline_data') and part.inline_data:
                 inline_data = part.inline_data
                 
                 # Extract the media data and MIME type
@@ -214,7 +236,7 @@ async def save_inline_media_as_artifact(
                     
                     return f"✅ Successfully saved media as artifact: {filename} (MIME: {mime_type}, Version: {version})"
             
-            # Also check if this is a blob/file part that might contain media data
+            # Also check if this is a file_data part 
             elif hasattr(part, 'file_data') and part.file_data:
                 file_data = part.file_data
                 if hasattr(file_data, 'mime_type'):
@@ -241,7 +263,7 @@ async def save_inline_media_as_artifact(
             except:
                 pass
                 
-            return "❌ No inline_data or file_data found in the current message to save as artifact"
+            return "❌ No inline_data, file_data, or direct blob found in the current message to save as artifact"
             
     except Exception as e:
         logger.error(f"Error saving inline media as artifact: {e}")
