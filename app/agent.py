@@ -594,8 +594,9 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
             path_parts = blob.name.split('/')
             if user_id == '*':
                 # Path: app/user_id/shared/filename (4 parts minimum)
-                if len(path_parts) >= 4 and len(path_parts) >= 3 and path_parts[2] == 'shared':
+                if len(path_parts) >= 4 and path_parts[2] == 'shared':
                     found_filename = path_parts[3]
+                    print(f"DEBUG: Checking wildcard blob: {blob.name}, extracted filename: {found_filename}")
                 else:
                     continue
             else:
@@ -604,15 +605,15 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
                     found_filename = path_parts[3]
                 else:
                     continue
+            
+            # Check if this blob matches our target filename (with or without version suffix)
+            if (found_filename == filename or 
+                found_filename.startswith(filename.split(' v')[0]) or
+                filename.startswith(found_filename)):
                 
-                # Check if this blob matches our target filename (with or without version suffix)
-                if (found_filename == filename or 
-                    found_filename.startswith(filename.split(' v')[0]) or
-                    filename.startswith(found_filename)):
-                    
-                    print(f"DEBUG: Found potential match: {blob.name}")
-                    found_blob = blob
-                    break
+                print(f"DEBUG: Found matching blob: {blob.name}")
+                found_blob = blob
+                break
         
         if not found_blob:
             return f"Artifact '{filename}' not found in GCS. Searched prefix: '{prefix}'"
