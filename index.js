@@ -812,12 +812,13 @@ class WhatsAppBot {
             
             // Auto-trigger @Myker when media is uploaded
             if (mediaParts.length > 0) {
+                const uploadedFilename = mediaParts[0].filename || 'uploaded_media';
                 if (!messageText) {
-                    // Media only: Request renaming
-                    adkMessage = '@Myker I\'ve uploaded a media file to rename_and_save_media_artifact.';
+                    // Media only: Request immediate artifact saving and smart renaming
+                    adkMessage = `@Myker I've uploaded a media file "${uploadedFilename}". Please save this inline_data as an artifact first, then rename it with a smart descriptive filename based on what you see in the content.`;
                 } else {
-                    // Media + text: Request renaming and public URL, then append user's text
-                    adkMessage = '@Myker I\'ve uploaded a media file to rename_and_save_media_artifact and make_artifact_public. ' + messageText;
+                    // Media + text: Request saving, renaming and public URL, then append user's text
+                    adkMessage = `@Myker I've uploaded a media file "${uploadedFilename}". Please save this as an artifact, rename it descriptively, and make it public. Then: ` + messageText;
                 }
             }
             

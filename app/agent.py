@@ -166,23 +166,77 @@ async def list_user_artifacts(tool_context: ToolContext) -> str:
         return f"Error listing artifacts: {e}. Artifact service may not be configured."
 
 
+async def save_inline_media_as_artifact(
+    filename: str,
+    tool_context: ToolContext
+) -> str:
+    """
+    Save inline_data from the current message as an artifact with the specified filename.
+    This extracts media from inline_data in the conversation and stores it as an artifact.
+    
+    Args:
+        filename (str): The filename to use when saving the artifact
+        tool_context (ToolContext): Context for accessing current message and saving artifacts
+        
+    Returns:
+        str: Success message with filename or error message
+    """
+    try:
+        # Get the current invocation context to access the message
+        invocation_context = getattr(tool_context, '_invocation_context', None)
+        if not invocation_context:
+            return "❌ Cannot access current message context to extract inline_data"
+        
+        # Try to get the user content which should contain the inline_data
+        user_content = getattr(invocation_context, 'user_content', None)
+        if not user_content or not hasattr(user_content, 'parts'):
+            return "❌ Cannot access message parts to extract inline_data"
+            
+        # Look for inline_data in the message parts
+        saved_count = 0
+        for part in user_content.parts:
+            if hasattr(part, 'inline_data') and part.inline_data:
+                inline_data = part.inline_data
+                
+                # Extract the media data and MIME type
+                if hasattr(inline_data, 'data') and hasattr(inline_data, 'mime_type'):
+                    import base64
+                    
+                    # Decode the base64 data
+                    media_data = base64.b64decode(inline_data.data)
+                    mime_type = inline_data.mime_type
+                    
+                    # Save as artifact using tool_context
+                    version = await tool_context.save_artifact(filename, media_data, mime_type)
+                    saved_count += 1
+                    
+                    logger.info(f"Saved inline_data as artifact: {filename} (version: {version})")
+                    
+                    return f"✅ Successfully saved media as artifact: {filename} (MIME: {mime_type}, Version: {version})"
+        
+        if saved_count == 0:
+            return "❌ No inline_data found in the current message to save as artifact"
+            
+    except Exception as e:
+        logger.error(f"Error saving inline media as artifact: {e}")
+        return f"❌ Error saving media as artifact: {str(e)}"
+
+
 async def rename_and_save_media_artifact(
     original_filename: str, 
     description: str, 
     tool_context: ToolContext
 ) -> str:
     """
-    Renames a media artifact (image or video) with a descriptive filename and saves it.
-    This function loads the original artifact, creates a new filename based on the description,
-    and saves it with the new name.
-
+    Rename and save a media artifact with a descriptive filename.
+    
     Args:
-        original_filename (str): The original name of the media artifact
-        description (str): A 50-character or less description to use as the new filename
+        original_filename (str): The current name of the artifact
+        description (str): A descriptive name (max 50 chars) for the new filename
         tool_context (ToolContext): Context for accessing artifacts
-
+    
     Returns:
-        str: Confirmation message with the new filename and version
+        str: Success message with old and new filenames
     """
     try:
         # Load the original artifact
@@ -403,23 +457,35 @@ The webhook-based system (register_video_webhook) is still available for compati
 - **Videos**: Analyze visual content, describe scenes, extract key frames
 - **Documents**: Read, summarize, extract information from PDFs and text files
 
-**CRITICAL: Automatic Media Renaming Workflow**
-When you receive media files (images or videos) uploaded by users:
-1. **All media files MUST go through rename_and_save_media_artifact**
-2. **Generate a clean, descriptive 50-character filename** that captures the key visual elements
-3. **Call rename_and_save_media_artifact immediately** for every image or video received:
-   - original_filename: The uploaded filename
-   - description: Your 50-character description
-   - This automatically saves the artifact with a descriptive, searchable name
-4. **This is mandatory for ALL images and videos** - no exceptions
-5. **Audio and documents do NOT require renaming** - only images and videos
+**CRITICAL: Automatic Media Processing Workflow**
+When you receive messages with inline_data (images/videos/audio) from the WhatsApp bot:
 
-Example automatic workflow:
-User uploads "IMG_1234.jpg" with visual content showing a sunset over mountains
-→ You automatically analyze the image content
-→ You immediately call rename_and_save_media_artifact("IMG_1234.jpg", "sunset_over_snowy_mountain_peaks_golden_hour")
-→ The artifact is saved with a descriptive name for easy future reference
-→ You then provide your analysis to the user
+**Step 1: Store as Artifact**
+- Call `save_inline_media_as_artifact(filename)` with the filename mentioned in the user's message
+- This extracts inline_data from your current message and saves it as an artifact
+- Use the exact filename the user mentioned (e.g., "media_abc123.jpg")
+
+**Step 2: Rename Images/Videos (Mandatory)**
+- For images and videos ONLY, call `rename_and_save_media_artifact` 
+- Generate a clean, descriptive 50-character filename based on content analysis
+- This replaces the random UUID filename with something meaningful
+
+**Step 3: Analyze and Respond**
+- Provide detailed analysis of the media content
+- Explain what you renamed the file to and why
+
+**Example workflow:**
+User uploads image → Message contains inline_data with filename "media_abc123.jpg"
+→ You call save_inline_media_as_artifact("media_abc123.jpg") to store the inline_data as an artifact
+→ You analyze the visual content (e.g., see a sunset over mountains)
+→ You call rename_and_save_media_artifact("media_abc123.jpg", "golden_sunset_over_snowy_mountain_peaks")
+→ File is now stored as "golden_sunset_over_snowy_mountain_peaks.jpg"
+→ You explain what you saw and how you renamed it
+
+**Key Points:**
+- Always save inline_data as artifacts BEFORE trying to rename
+- Only images and videos get renamed - audio/documents keep original names
+- Generate descriptive filenames that help users find their media later
 
 **Working with Uploaded Images for fal.ai:**
 When users upload an image and want to use it with fal.ai models (especially for image-to-video):
@@ -769,6 +835,7 @@ websearch_tool = AgentTool(agent=websearch_agent)
 
 # Create artifact management tools
 list_artifacts_tool = FunctionTool(func=list_user_artifacts)
+save_inline_media_tool = FunctionTool(func=save_inline_media_as_artifact)
 rename_media_artifact_tool = FunctionTool(func=rename_and_save_media_artifact)
 
 
@@ -832,7 +899,7 @@ async def after_agent_callback(callback_context: CallbackContext) -> None:
         pass
 
 
-tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, rename_media_artifact_tool, make_public_tool, poll_fal_tool]
+tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, save_inline_media_tool, rename_media_artifact_tool, make_public_tool, poll_fal_tool]
 
 root_agent = Agent(
     name="root_agent",
