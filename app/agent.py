@@ -195,27 +195,53 @@ async def save_inline_media_as_artifact(
         # Look for inline_data in the message parts
         saved_count = 0
         for part in user_content.parts:
+            # Check if this part has inline_data attribute
             if hasattr(part, 'inline_data') and part.inline_data:
                 inline_data = part.inline_data
                 
                 # Extract the media data and MIME type
                 if hasattr(inline_data, 'data') and hasattr(inline_data, 'mime_type'):
-                    import base64
-                    
-                    # Create an artifact part with the inline_data
-                    # The tool_context.save_artifact expects an artifact part, not raw data
                     mime_type = inline_data.mime_type
                     
-                    # Save as artifact using tool_context - pass the inline_data directly
-                    version = await tool_context.save_artifact(filename, inline_data)
+                    # Create a new Part with the inline_data
+                    artifact_part = types.Part(inline_data=inline_data)
+                    
+                    # Save as artifact using tool_context
+                    version = await tool_context.save_artifact(filename, artifact_part)
                     saved_count += 1
                     
                     logger.info(f"Saved inline_data as artifact: {filename} (version: {version})")
                     
                     return f"✅ Successfully saved media as artifact: {filename} (MIME: {mime_type}, Version: {version})"
+            
+            # Also check if this is a blob/file part that might contain media data
+            elif hasattr(part, 'file_data') and part.file_data:
+                file_data = part.file_data
+                if hasattr(file_data, 'mime_type'):
+                    mime_type = file_data.mime_type
+                    
+                    # Create a Part with the file_data
+                    artifact_part = types.Part(file_data=file_data)
+                    
+                    # Save as artifact using tool_context
+                    version = await tool_context.save_artifact(filename, artifact_part)
+                    saved_count += 1
+                    
+                    logger.info(f"Saved file_data as artifact: {filename} (version: {version})")
+                    
+                    return f"✅ Successfully saved media as artifact: {filename} (MIME: {mime_type}, Version: {version})"
         
         if saved_count == 0:
-            return "❌ No inline_data found in the current message to save as artifact"
+            # Try a different approach - check if the filename already exists in context
+            try:
+                # Sometimes the media is already saved by the WhatsApp bot
+                existing_artifact = await tool_context.load_artifact(filename)
+                if existing_artifact:
+                    return f"✅ Media already exists as artifact: {filename}. No need to save again."
+            except:
+                pass
+                
+            return "❌ No inline_data or file_data found in the current message to save as artifact"
             
     except Exception as e:
         logger.error(f"Error saving inline media as artifact: {e}")

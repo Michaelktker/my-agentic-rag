@@ -776,9 +776,13 @@ class WhatsAppBot {
 
             // Process media if present
             let mediaParts = [];
+            let uploadedFilename = 'uploaded_media';
             if (hasMedia) {
                 try {
                     const mediaResult = await this.mediaHandler.processMediaMessage(message, userId, session.sessionId);
+                    
+                    // Store the actual filename from media processing
+                    uploadedFilename = mediaResult.filename;
                     
                     // Create Part object for ADK (use base64 data)
                     mediaParts.push({
@@ -812,7 +816,6 @@ class WhatsAppBot {
             
             // Auto-trigger @Myker when media is uploaded
             if (mediaParts.length > 0) {
-                const uploadedFilename = mediaParts[0].filename || 'uploaded_media';
                 if (!messageText) {
                     // Media only: Request immediate artifact saving and smart renaming
                     adkMessage = `@Myker I've uploaded a media file "${uploadedFilename}". Please save this inline_data as an artifact first, then rename it with a smart descriptive filename based on what you see in the content.`;
