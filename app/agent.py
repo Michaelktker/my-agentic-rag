@@ -545,6 +545,8 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
         
         # Get bucket from environment or default
         artifacts_bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
+        logger.info(f"🪣 Using GCS bucket: {artifacts_bucket_name}")
+        
         storage_client = storage.Client()
         bucket = storage_client.bucket(artifacts_bucket_name)
         
@@ -552,91 +554,111 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
         user_id = getattr(tool_context, 'user_id', None)
         session_id = getattr(tool_context, 'session_id', '')
         
-        # Debug logging for troubleshooting - check all tool_context attributes
-        print(f"DEBUG: Tool context type: {type(tool_context)}")
-        print(f"DEBUG: Tool context attributes: {dir(tool_context)}")
-        print(f"DEBUG: Tool context user_id: {user_id}")
-        print(f"DEBUG: Tool context session_id: {session_id}")
+        logger.info(f"🔍 Tool context: type={type(tool_context).__name__}, user_id={user_id}, session_id={session_id}")
         
         # Try alternative ways to get user information from tool context
         if not user_id:
-            # Check if there's a different attribute name
             for attr in ['userId', 'user', '_user_id', 'current_user']:
                 if hasattr(tool_context, attr):
                     alt_user = getattr(tool_context, attr)
-                    print(f"DEBUG: Found alternative user attribute '{attr}': {alt_user}")
                     if alt_user:
+                        logger.info(f"✅ Found user via '{attr}': {alt_user}")
                         user_id = alt_user
                         break
         
         if not user_id:
-            # Always search across all users if we can't determine the specific user
-            # This is more reliable than trying to guess the user ID
-            user_id = '*'  # Wildcard to search all users
-            print(f"DEBUG: No user_id found, using wildcard search")
+            # Search across all users - wildcard approach
+            user_id = '*'
+            logger.info(f"⚠️ No user_id found, using wildcard search across all users")
         
-        # Search for the artifact across all sessions for this user
+        # Determine search prefix based on user_id
         if user_id == '*':
-            # Search across all users if we can't determine the specific user
             prefix = "app/"
-            print(f"DEBUG: Searching for artifact '{filename}' across all users with prefix '{prefix}'")
+            logger.info(f"🔎 Wildcard search with prefix: {prefix}")
         else:
-            # User-based storage: all artifacts are in app/user_id/shared/
             prefix = f"app/{user_id}/shared/"
-            print(f"DEBUG: Searching for artifact '{filename}' for user '{user_id}' with prefix '{prefix}'")
+            logger.info(f"🔎 User-specific search with prefix: {prefix}")
         
         # List all blobs with this prefix to find artifacts
-        blobs = bucket.list_blobs(prefix=prefix)
+        logger.info(f"📋 Listing blobs in bucket '{artifacts_bucket_name}' with prefix '{prefix}'")
+        blobs = list(bucket.list_blobs(prefix=prefix))
+        logger.info(f"📊 Found {len(blobs)} total blobs in prefix")
+        
         found_blob = None
         
         for blob in blobs:
             # Extract the path components: app/user_id/shared/filename
             path_parts = blob.name.split('/')
+            logger.info(f"🔍 Checking blob: {blob.name} (parts: {len(path_parts)})")
+            
             if user_id == '*':
                 # Path: app/user_id/shared/filename (4 parts minimum)
                 if len(path_parts) >= 4 and path_parts[2] == 'shared':
                     found_filename = path_parts[3]
-                    print(f"DEBUG: Checking wildcard blob: {blob.name}, extracted filename: {found_filename}")
+                    logger.info(f"  📄 Extracted filename: {found_filename}")
                 else:
+                    logger.info(f"  ⏭️ Skipping: not in shared/ directory")
                     continue
             else:
                 # Path: app/user_id/shared/filename (4 parts exact for our prefix)
                 if len(path_parts) >= 4:
                     found_filename = path_parts[3]
+                    logger.info(f"  📄 Extracted filename: {found_filename}")
                 else:
+                    logger.info(f"  ⏭️ Skipping: insufficient path parts")
                     continue
             
             # Check if this blob matches our target filename (with or without version suffix)
+            # Strip version suffix if present (e.g., "file.jpg v1" -> "file.jpg")
+            filename_base = filename.split(' v')[0]
+            found_filename_base = found_filename.split(' v')[0]
+            
             if (found_filename == filename or 
-                found_filename.startswith(filename.split(' v')[0]) or
-                filename.startswith(found_filename)):
+                found_filename_base == filename_base or
+                filename.startswith(found_filename_base) or
+                found_filename.startswith(filename_base)):
                 
-                print(f"DEBUG: Found matching blob: {blob.name}")
+                logger.info(f"✅ MATCH FOUND: {blob.name}")
                 found_blob = blob
                 break
+            else:
+                logger.info(f"  ❌ No match: '{found_filename}' != '{filename}'")
         
         if not found_blob:
-            return f"Artifact '{filename}' not found in GCS. Searched prefix: '{prefix}'"
+            error_msg = f"❌ Artifact '{filename}' not found in GCS.\n\nSearched:\n- Bucket: {artifacts_bucket_name}\n- Prefix: {prefix}\n- Found {len(blobs)} blobs total\n\nAvailable files in searched location:\n"
+            for blob in blobs[:10]:  # Show first 10 files
+                error_msg += f"  • {blob.name.split('/')[-1]}\n"
+            if len(blobs) > 10:
+                error_msg += f"  ... and {len(blobs) - 10} more files"
+            logger.error(error_msg)
+            return error_msg
+        
+        logger.info(f"🎯 Found target blob: {found_blob.name}")
         
         # Check if this is an ADK JSON format file and extract raw image data
         try:
             # Download the content to check format
+            logger.info(f"⬇️ Downloading blob content to check format...")
             content = found_blob.download_as_bytes()
+            logger.info(f"✅ Downloaded {len(content)} bytes")
             
             try:
                 # Try to parse as ADK JSON format
                 artifact_data = json.loads(content.decode('utf-8'))
+                logger.info(f"📄 Parsed as JSON, checking for ADK format...")
                 
                 if 'data' in artifact_data and isinstance(artifact_data['data'], dict) and artifact_data['data'].get('__buffer_type'):
                     # This is ADK format with byte array data
-                    print(f"DEBUG: Found ADK format artifact, extracting raw image data")
+                    logger.info(f"🔧 ADK JSON format detected - extracting raw image data")
                     
                     # Extract the raw image bytes
                     byte_array = artifact_data['data']['data']
                     raw_image_data = bytes(byte_array)
+                    logger.info(f"✅ Extracted {len(raw_image_data)} bytes of raw image data")
                     
                     # Get the mime type
                     mime_type = artifact_data.get('mimeType', 'image/jpeg')
+                    logger.info(f"📝 MIME type: {mime_type}")
                     
                     # Create a new blob for the raw image
                     raw_filename = filename.replace('.jpg', '_raw.jpg').replace('.png', '_raw.png')
@@ -646,18 +668,19 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
                     # Create path for raw image (same structure but with _raw suffix)
                     raw_blob_name = found_blob.name.replace(filename, raw_filename)
                     raw_blob = bucket.blob(raw_blob_name)
+                    logger.info(f"📤 Uploading raw image to: {raw_blob_name}")
                     
                     # Upload the raw image data
                     raw_blob.upload_from_string(raw_image_data, content_type=mime_type)
-                    print(f"DEBUG: ✅ Created raw image blob: {raw_blob_name}")
+                    logger.info(f"✅ Raw image uploaded successfully")
                     
                     # Now make the raw image public
                     try:
                         raw_blob.make_public()
                         public_url = raw_blob.public_url
-                        print(f"DEBUG: ✅ Successfully made raw image public: {raw_blob.name}")
+                        logger.info(f"✅ Made raw image public: {public_url}")
                     except Exception as public_error:
-                        print(f"DEBUG: make_public() failed for raw image: {public_error}")
+                        logger.warning(f"⚠️ make_public() failed: {public_error}, trying bucket policy...")
                         # Set bucket-level public access if needed
                         try:
                             policy = bucket.get_iam_policy(requested_policy_version=3)
@@ -676,13 +699,13 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
                             if not binding_exists:
                                 policy.bindings.append(binding)
                                 bucket.set_iam_policy(policy)
-                                print(f"DEBUG: ✅ Set bucket-level public access")
+                                logger.info(f"✅ Set bucket-level public access")
                             
                             public_url = raw_blob.public_url
-                            print(f"DEBUG: ✅ Generated public URL for raw image")
+                            logger.info(f"✅ Generated public URL via bucket policy")
                             
                         except Exception as bucket_error:
-                            print(f"DEBUG: Bucket policy failed: {bucket_error}")
+                            logger.error(f"❌ Bucket policy failed: {bucket_error}")
                             public_url = raw_blob.media_link
                     
                     # Update found_blob reference for the response
@@ -690,19 +713,19 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
                     
                 else:
                     # Not ADK format, treat as regular blob
-                    print(f"DEBUG: Not ADK format, making original blob public")
+                    logger.info(f"ℹ️ Not ADK JSON format, treating as regular blob")
                     raise ValueError("Not ADK format")
                     
-            except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+            except (json.JSONDecodeError, ValueError, UnicodeDecodeError) as e:
                 # Not JSON or not ADK format, make the original blob public
-                print(f"DEBUG: File is not ADK JSON format, making original blob public")
+                logger.info(f"ℹ️ File is not ADK JSON format ({type(e).__name__}), making original blob public")
                 
                 try:
                     found_blob.make_public()
                     public_url = found_blob.public_url
-                    print(f"DEBUG: ✅ Successfully made original blob public: {found_blob.name}")
+                    logger.info(f"✅ Made original blob public: {public_url}")
                 except Exception as public_error:
-                    print(f"DEBUG: make_public() failed: {public_error}")
+                    logger.warning(f"⚠️ make_public() failed: {public_error}, trying bucket policy...")
                     # Set bucket-level public access
                     try:
                         policy = bucket.get_iam_policy(requested_policy_version=3)
@@ -721,16 +744,17 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
                         if not binding_exists:
                             policy.bindings.append(binding)
                             bucket.set_iam_policy(policy)
-                            print(f"DEBUG: ✅ Set bucket-level public access")
+                            logger.info(f"✅ Set bucket-level public access")
                         
                         public_url = found_blob.public_url
-                        print(f"DEBUG: ✅ Generated public URL via bucket policy")
+                        logger.info(f"✅ Generated public URL via bucket policy")
                         
                     except Exception as bucket_error:
-                        print(f"DEBUG: Bucket policy failed: {bucket_error}")
+                        logger.error(f"❌ Bucket policy failed: {bucket_error}")
                         public_url = found_blob.media_link
                 
         except Exception as e:
+            logger.error(f"❌ Error processing artifact: {e}")
             return f"Error making artifact '{filename}' public: {e}"
         
         # Get file info for the response
@@ -745,9 +769,12 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
         else:
             size_str = f"{size_bytes} bytes"
         
+        logger.info(f"🎉 Success! Public URL generated: {public_url}")
+        
         return f"✅ Successfully made '{filename}' public!\n\n🔗 **Public URL**: {public_url}\n\nThis URL can now be used directly with fal.ai models for:\n- Image-to-video generation\n- Advanced image processing\n- AI model workflows\n\nFile details:\n- Type: {mime_type}\n- Size: {size_str}\n- GCS Path: {found_blob.name}\n\n**Ready for fal_mcp_agent use!**"
         
     except Exception as e:
+        logger.error(f"❌ Critical error in make_artifact_public: {e}", exc_info=True)
         return f"Error making artifact '{filename}' public: {e}"
 
 
