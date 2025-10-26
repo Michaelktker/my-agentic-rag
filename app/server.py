@@ -88,9 +88,13 @@ async def lifespan(app: FastAPI):
 
 
 # Create the FastAPI app using ADK's get_fast_api_app
+# Configure artifact service with user-scoped GCS paths (ADK best practice)
+# Path structure: gs://bucket_name/app/{user_id}/{filename}/{version}
+# This allows artifacts to persist across different sessions for the same user
 app = get_fast_api_app(
     agents_dir=AGENT_DIR,
     session_service_uri="sqlite:///./sessions.db",
+    artifact_service_uri=artifacts_bucket_uri,  # GCS bucket for user-scoped artifacts
     allow_origins=allow_origins,
     web=True,
 )

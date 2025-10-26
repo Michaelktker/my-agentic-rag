@@ -531,6 +531,11 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
     """
     Make an artifact publicly accessible via GCS public URL.
     This creates a direct public URL that can be used with fal.ai models.
+    
+    Uses user-scoped artifact paths following ADK best practices:
+    - Path structure: app/{user_id}/{filename}/{version}
+    - Artifacts are scoped by user, not by session
+    - This allows artifacts to persist across different sessions
 
     Args:
         filename (str): The name of the artifact file to make public
@@ -550,11 +555,10 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
         storage_client = storage.Client()
         bucket = storage_client.bucket(artifacts_bucket_name)
         
-        # Get user ID from tool context if available
+        # Get user ID from tool context - this is the primary scoping mechanism
         user_id = getattr(tool_context, 'user_id', None)
-        session_id = getattr(tool_context, 'session_id', '')
         
-        logger.info(f"🔍 Tool context: type={type(tool_context).__name__}, user_id={user_id}, session_id={session_id}")
+        logger.info(f"🔍 Tool context: type={type(tool_context).__name__}, user_id={user_id}")
         
         # Try alternative ways to get user information from tool context
         if not user_id:
@@ -572,13 +576,14 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
             logger.info(f"⚠️ No user_id found, using wildcard search across all users")
         
         # Determine search prefix based on user_id
-        # GCS structure: app/{user_id}/{session_id}/{filename}/{version}
+        # USER-SCOPED GCS structure (ADK best practice): app/{user_id}/{filename}/{version}
+        # This allows artifacts to persist across different sessions for the same user
         if user_id == '*':
             prefix = "app/"
             logger.info(f"🔎 Wildcard search with prefix: {prefix}")
         else:
             prefix = f"app/{user_id}/"
-            logger.info(f"🔎 User-specific search with prefix: {prefix}")
+            logger.info(f"🔎 User-scoped search with prefix: {prefix}")
         
         # List all blobs with this prefix to find artifacts
         logger.info(f"📋 Listing blobs in bucket '{artifacts_bucket_name}' with prefix '{prefix}'")
@@ -586,31 +591,46 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
         logger.info(f"📊 Found {len(blobs)} total blobs in prefix")
         
         found_blob = None
-        
+
         for blob in blobs:
-            # Extract the path components: app/user_id/session_id/filename/version
+            # Extract the path components for USER-SCOPED artifacts
+            # Expected path structure: app/{user_id}/{filename}/{version}
+            # However, legacy session-scoped paths may exist: app/{user_id}/{session_id}/{filename}/{version}
             path_parts = blob.name.split('/')
             logger.info(f"🔍 Checking blob: {blob.name} (parts: {len(path_parts)})")
-            
-            # Path structure: app/user_id/session_id/filename/version (5 parts)
-            if len(path_parts) >= 5:
-                found_filename = path_parts[3]  # filename is at index 3
-                logger.info(f"  📄 Extracted filename: {found_filename}")
+
+            # Handle both user-scoped (3-part) and legacy session-scoped (5-part) paths
+            # User-scoped: app/user_id/filename/version (4 parts total)
+            # Session-scoped: app/user_id/session_id/filename/version (5 parts total)
+            if len(path_parts) >= 4:
+                # filename is always second-to-last component (before version)
+                found_filename = path_parts[-2]
+                user_from_path = path_parts[1] if len(path_parts) > 1 else None
+                logger.info(f"  📄 Candidate filename: {found_filename} (user_from_path={user_from_path})")
             else:
-                logger.info(f"  ⏭️ Skipping: insufficient path parts (need 5, got {len(path_parts)})")
+                logger.info(f"  ⏭️ Skipping: insufficient path parts (got {len(path_parts)})")
                 continue
-            
-            # Check if this blob matches our target filename (with or without version suffix)
-            # Strip version suffix if present (e.g., "file.jpg v1" -> "file.jpg")
-            filename_base = filename.split(' v')[0]
-            found_filename_base = found_filename.split(' v')[0]
-            
-            if (found_filename == filename or 
-                found_filename_base == filename_base or
-                filename.startswith(found_filename_base) or
-                found_filename.startswith(filename_base)):
-                
+
+            # Normalize and compare the filename variations (strip ADK version suffixes if present)
+            filename_base = filename.split(' v')[0].lower()
+            found_filename_base = found_filename.split(' v')[0].lower()
+
+            # Also consider matches where extension was added/removed or only a prefix/suffix differs
+            def norm(s: str) -> str:
+                return s.lower().strip().rstrip('/')
+
+            if (
+                norm(found_filename) == norm(filename)
+                or norm(found_filename_base) == norm(filename_base)
+                or norm(filename).startswith(norm(found_filename_base))
+                or norm(found_filename).startswith(norm(filename_base))
+                or f"/{filename}/" in f"/{blob.name}/"
+            ):
                 logger.info(f"✅ MATCH FOUND: {blob.name}")
+                # if caller lacked user_id, capture the user we discovered in the path
+                if not user_id and user_from_path:
+                    user_id = user_from_path
+                    logger.info(f"ℹ️ Inferred user_id from blob path: {user_id}")
                 found_blob = blob
                 break
             else:
