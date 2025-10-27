@@ -573,6 +573,7 @@ class WhatsAppBot {
         this.sock = null;
         this.authState = new GCSAuthState();
         this.activeSessions = new Map(); // Store user sessions
+        this.pendingTimers = new Map(); // Track pending @Fal timers
         this.mediaHandler = new MediaHandler();
         this.sessionManager = new UserSessionManager();
     }
@@ -1377,16 +1378,41 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
                 const messageWithoutFal = responseText.replace(/^@Fal\s*/i, '').trim();
                 logger.info(`Timer message: ${messageWithoutFal.substring(0, 100)}...`);
                 
+                // Extract request ID and status URL from the message
+                const requestIdMatch = messageWithoutFal.match(/Request ID:\s*([^\s\n]+)/);
+                const statusUrlMatch = messageWithoutFal.match(/Status URL:\s*([^\s\n]+)/);
+                
+                const requestId = requestIdMatch ? requestIdMatch[1] : null;
+                const statusUrl = statusUrlMatch ? statusUrlMatch[1] : null;
+                
+                logger.info(`Extracted from @Fal message - Request ID: ${requestId}, Status URL: ${statusUrl}`);
+                
                 // Get user ID from jid
                 const userId = this.getUserIdFromJid(jid);
                 
+                // Create unique timer key
+                const timerKey = `${userId}_${sessionId}_${Date.now()}`;
+                
                 // Schedule status check after 5 minutes
-                setTimeout(async () => {
+                const timerId = setTimeout(async () => {
                     try {
                         logger.info(`⏰ 5-minute timer elapsed - checking status for session ${sessionId}`);
+                        logger.info(`Timer key: ${timerKey}`);
+                        logger.info(`Request ID: ${requestId}, Status URL: ${statusUrl}`);
                         
-                        // Send the message back to ADK with @Myker prefix to ensure it's processed
-                        const statusCheckMessage = `@Myker ${messageWithoutFal}`;
+                        // Remove timer from pending list
+                        this.pendingTimers.delete(timerKey);
+                        
+                        // Create a proper status check command that will trigger the polling tool
+                        let statusCheckMessage;
+                        if (requestId && statusUrl) {
+                            // Construct a command that will make the agent use the poll_fal_operation tool
+                            statusCheckMessage = `@Myker Please check the status of my FAL.ai generation. The request ID is ${requestId} and the status URL is ${statusUrl}. Use the poll_fal_operation tool to check if it's completed.`;
+                        } else {
+                            // Fallback if we couldn't extract IDs
+                            statusCheckMessage = `@Myker ${messageWithoutFal}`;
+                            logger.warn('⚠️ Could not extract request ID/status URL, sending original message');
+                        }
                         
                         logger.info(`📤 Sending status check to ADK: "${statusCheckMessage.substring(0, 100)}..."`);
                         
@@ -1406,12 +1432,28 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
                                     await this.sendImage(jid, image);
                                 }
                             }
+                        } else {
+                            logger.warn('⚠️ Status check returned no response');
                         }
                     } catch (error) {
                         logger.error('Error during 5-minute status check:', error);
                         await this.sendMessage(jid, 'I tried to check on your request, but encountered an error. Please ask me to check the status again.');
                     }
                 }, 5 * 60 * 1000); // 5 minutes in milliseconds
+                
+                // Store timer reference to prevent garbage collection
+                this.pendingTimers.set(timerKey, {
+                    timerId,
+                    userId,
+                    sessionId,
+                    jid,
+                    message: messageWithoutFal,
+                    requestId: requestId,
+                    statusUrl: statusUrl,
+                    scheduledAt: new Date().toISOString()
+                });
+                
+                logger.info(`✅ Timer scheduled with key: ${timerKey}, total pending: ${this.pendingTimers.size}`);
                 
                 // Return null to prevent sending the @Fal message to WhatsApp
                 logger.info('Returning null - @Fal message will not be sent to WhatsApp');
