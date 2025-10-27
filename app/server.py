@@ -56,7 +56,8 @@ processor = export.BatchSpanProcessor(CloudTraceLoggingSpanExporter())
 provider.add_span_processor(processor)
 trace.set_tracer_provider(provider)
 
-AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Point to the app directory where root_agent is defined
+AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Agent Engine session configuration - commented out for dev testing
 # Use environment variable for agent name, default to project name
 # agent_name = os.environ.get("AGENT_ENGINE_SESSION_NAME", "my-agentic-rag")
