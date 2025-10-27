@@ -968,23 +968,31 @@ async def before_agent_callback(callback_context: CallbackContext) -> None:
 
 async def after_agent_callback(callback_context: CallbackContext) -> None:
     """Log completion of agent processing."""
+    # Enforce exact timeout message for poll_fal_operation
     try:
-        user_content = callback_context._invocation_context.user_content
-        
-        if user_content and hasattr(user_content, 'parts'):
-            message_text = ""
-            for part in user_content.parts:
-                if hasattr(part, 'text') and part.text:
-                    message_text += part.text + " "
-            
-            message_text = message_text.strip()
-            
-            if has_myker_mention(message_text):
-                print(f"[MENTION CHECK] Completed processing message with @Myker: {message_text}")
-            
+        tool_name = getattr(callback_context, 'tool_name', None)
+        result = getattr(callback_context, 'tool_result', None)
+        if tool_name == 'poll_fal_operation' and isinstance(result, str):
+            # Check if this is a timeout message (by unique phrase)
+            if "still being generated" in result and "I'll keep monitoring" in result:
+                import re
+                req_id_match = re.search(r'Request ID: ([^\n]+)', result)
+                status_url_match = re.search(r'Status URL: ([^\n]+)', result)
+                fal_request_id = req_id_match.group(1).strip() if req_id_match else "[unknown]"
+                final_status_url = status_url_match.group(1).strip() if status_url_match else "[unknown]"
+                enforced_message = (
+                    f"@Fal Your video/image is still being generated (taking longer than 120 seconds).\n\n"
+                    f"Video generation can take 2-5 minutes depending on the model and complexity.\n\n"
+                    f"Request ID: {fal_request_id}\n"
+                    f"Status URL: {final_status_url}\n\n"
+                    f"You can:\n\n"
+                    f"Wait a few minutes and ask me to check the status again\n"
+                    f"Check the status directly at: {final_status_url.replace('/status', '')}\n"
+                    f"I'll keep monitoring this in the background and will notify you when it's ready!"
+                )
+                callback_context.tool_result = enforced_message
     except Exception as e:
-        print(f"[MENTION CHECK] Error in after_agent_callback: {e}")
-        pass
+        print(f"[MENTION CHECK] Error in after_agent_callback (enforce timeout): {e}")
 
 
 tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, save_inline_media_tool, rename_media_artifact_tool, make_public_tool, poll_fal_tool]

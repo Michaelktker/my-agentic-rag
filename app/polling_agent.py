@@ -184,9 +184,8 @@ async def poll_fal_operation(fal_request_id: str, submission_type: str = "text-t
             final_status_url = f"https://queue.fal.run/requests/{fal_request_id}/status"
             logger.warning(f"⚠️ No status_url or model_name provided, using fallback: {final_status_url}")
     
-    # For videos, limit to 18 attempts (90 seconds) to avoid ADK timeout
-    # For images, use 30 attempts since they're usually faster
-    max_attempts = 18 if submission_type == "text-to-video" else 30
+    # Use unified timeout for both image and video generation (150 seconds)
+    max_attempts = 30  # 30 attempts × 5s = 150 seconds for both
     
     # Create session with timeout
     timeout = aiohttp.ClientTimeout(total=30)  # 30 second timeout per request
@@ -275,28 +274,17 @@ async def poll_fal_operation(fal_request_id: str, submission_type: str = "text-t
                     logger.error(error_result)
                     return error_result
         
-        # Reached max attempts - return helpful message based on submission type
-        if submission_type == "text-to-video":
-            timeout_result = f"""⏰ @Fal Your video is still being generated (taking longer than 90 seconds).
-
-Video generation can take 2-5 minutes depending on the model and complexity.
-
-**Request ID:** `{fal_request_id}`
-**Status URL:** {final_status_url}
-
-You can:
-1. Wait a few minutes and ask me to check the status again
-2. Check the status directly at: {final_status_url.replace('/status', '')}
-
-I'll keep monitoring this in the background and will notify you when it's ready!"""
-        else:
-            timeout_result = f"""⏰ Generation is still processing (longer than expected).
-
-**Request ID:** `{fal_request_id}`  
-**Status URL:** {final_status_url}
-
-Please wait a moment and ask me to check the status again."""
-        
+        # Reached max attempts - return unified helpful message for both types
+        timeout_result = (
+            f"@Fal Your video/image is still being generated (taking longer than 120 seconds).\n\n"
+            f"Video generation can take 2-5 minutes depending on the model and complexity.\n\n"
+            f"Request ID: {fal_request_id}\n"
+            f"Status URL: {final_status_url}\n\n"
+            f"You can:\n\n"
+            f"Wait a few minutes and ask me to check the status again\n"
+            f"Check the status directly at: {final_status_url.replace('/status', '')}\n"
+            f"I'll keep monitoring this in the background and will notify you when it's ready!"
+        )
         logger.warning(f"⏰ Reached max polling attempts ({max_attempts}), returning status message")
         return timeout_result
 
