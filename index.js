@@ -1350,6 +1350,55 @@ class WhatsAppBot {
                 }
             }
 
+            // Check if response starts with @Fal - indicates long-running operation timeout
+            if (responseText && responseText.trim().startsWith('@Fal')) {
+                logger.info('🕐 @Fal message detected - starting 5-minute timer for status check');
+                
+                // Extract the message without @Fal for logging
+                const messageWithoutFal = responseText.replace(/^@Fal\s*/i, '').trim();
+                logger.info(`Timer message: ${messageWithoutFal.substring(0, 100)}...`);
+                
+                // Get user ID from jid
+                const userId = this.getUserIdFromJid(jid);
+                
+                // Schedule status check after 5 minutes
+                setTimeout(async () => {
+                    try {
+                        logger.info(`⏰ 5-minute timer elapsed - checking status for session ${sessionId}`);
+                        
+                        // Send the message back to ADK without @Fal prefix to check status
+                        const statusCheckMessage = messageWithoutFal;
+                        
+                        logger.info(`📤 Sending status check to ADK: "${statusCheckMessage.substring(0, 100)}..."`);
+                        
+                        // Send back to ADK to check status
+                        const response = await this.sendToADK(statusCheckMessage, sessionId, userId, jid, []);
+                        
+                        // If we get a response, send it to the user
+                        if (response) {
+                            logger.info('✅ Status check complete - sending result to user');
+                            
+                            if (response.text) {
+                                await this.sendMessage(jid, response.text);
+                            }
+                            
+                            if (response.images && response.images.length > 0) {
+                                for (const image of response.images) {
+                                    await this.sendImage(jid, image);
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        logger.error('Error during 5-minute status check:', error);
+                        await this.sendMessage(jid, 'I tried to check on your request, but encountered an error. Please ask me to check the status again.');
+                    }
+                }, 5 * 60 * 1000); // 5 minutes in milliseconds
+                
+                // Return null to prevent sending the @Fal message to WhatsApp
+                logger.info('Returning null - @Fal message will not be sent to WhatsApp');
+                return null;
+            }
+
             // Combine inline images and artifact images
             const allImages = [...imageParts, ...artifactImages];
             
