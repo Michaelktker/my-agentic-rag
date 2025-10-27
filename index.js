@@ -1470,14 +1470,14 @@ class WhatsAppBot {
 
     async sendMessage(jid, text) {
         try {
-            // WhatsApp has message length limits, so we need to chunk long messages
-            const maxLength = 800; // More conservative limit for reliable WhatsApp delivery
+            // WhatsApp supports up to ~4096 characters - increased from 800 to reduce chunking
+            const maxLength = 4000; // Much higher limit to send messages as single responses
             
             if (text.length <= maxLength) {
                 await this.sock.sendMessage(jid, { text: text });
                 logger.info(`Sent message to ${jid}: ${text}`);
             } else {
-                // Split long messages into chunks
+                // Only chunk very long messages (>4000 characters)
                 const chunks = this.splitMessage(text, maxLength);
                 for (let i = 0; i < chunks.length; i++) {
                     const chunk = chunks[i];
@@ -1486,9 +1486,9 @@ class WhatsAppBot {
                     await this.sock.sendMessage(jid, { text: chunkText });
                     logger.info(`Sent message chunk ${i + 1}/${chunks.length} to ${jid}: ${chunk.substring(0, 100)}...`);
                     
-                    // Add small delay between chunks
+                    // Increased delay between chunks for better delivery
                     if (i < chunks.length - 1) {
-                        await new Promise(resolve => setTimeout(resolve, 500));
+                        await new Promise(resolve => setTimeout(resolve, 1000));
                     }
                 }
             }
