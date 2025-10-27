@@ -1385,8 +1385,8 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
                     try {
                         logger.info(`⏰ 5-minute timer elapsed - checking status for session ${sessionId}`);
                         
-                        // Send the message back to ADK without @Fal prefix to check status
-                        const statusCheckMessage = messageWithoutFal;
+                        // Send the message back to ADK with @Myker prefix to ensure it's processed
+                        const statusCheckMessage = `@Myker ${messageWithoutFal}`;
                         
                         logger.info(`📤 Sending status check to ADK: "${statusCheckMessage.substring(0, 100)}..."`);
                         
