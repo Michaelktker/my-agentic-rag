@@ -820,8 +820,10 @@ class WhatsAppBot {
                     // Media only: Request immediate artifact saving and smart renaming
                     adkMessage = `@Myker I've uploaded a media file "${uploadedFilename}". Please save this inline_data as an artifact first, then rename it with a smart descriptive filename based on what you see in the content.`;
                 } else {
-                    // Media + text: Request saving, renaming and public URL, then append user's text
-                    adkMessage = `@Myker I've uploaded a media file "${uploadedFilename}". Please save this as an artifact, rename it descriptively, and make it public. Then: ` + messageText;
+                    // Media + text: Single cohesive workflow instruction
+                    adkMessage = `@Myker Please help me with this image-based request: ${messageText}
+
+I've uploaded an image "${uploadedFilename}" that you'll need for this task. Please first save it as an artifact, rename it descriptively, and make it public to get a URL. Then use that public URL to complete my request.`;
                 }
             }
             
