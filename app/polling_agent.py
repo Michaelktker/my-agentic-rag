@@ -235,7 +235,9 @@ async def poll_fal_operation(fal_request_id: str, submission_type: str = "text-t
                                         logger.error(error_result)
                                         return error_result
                                 else:
-                                    error_result = f"❌ Error getting result: HTTP {result_response.status}"
+                                    # Capture detailed error information
+                                    error_text = await result_response.text()
+                                    error_result = f"❌ Error getting result: HTTP {result_response.status}\nDetails: {error_text}"
                                     logger.error(error_result)
                                     return error_result
                         

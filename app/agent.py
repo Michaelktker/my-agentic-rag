@@ -774,7 +774,8 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
                             
                         except Exception as bucket_error:
                             logger.error(f"❌ Bucket policy failed: {bucket_error}")
-                            public_url = raw_blob.media_link
+                            # Use simple public_url format instead of media_link - FAL.ai prefers this
+                            public_url = raw_blob.public_url
                     
                     # Update found_blob reference for the response
                     found_blob = raw_blob
@@ -819,7 +820,8 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
                         
                     except Exception as bucket_error:
                         logger.error(f"❌ Bucket policy failed: {bucket_error}")
-                        public_url = found_blob.media_link
+                        # Use simple public_url format instead of media_link - FAL.ai prefers this
+                        public_url = found_blob.public_url
                 
         except Exception as e:
             logger.error(f"❌ Error processing artifact: {e}")
