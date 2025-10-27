@@ -939,6 +939,23 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
             return message.message.extendedTextMessage.text;
         }
 
+        // Handle media with captions (image, video, document captions)
+        if (message.message.imageMessage?.caption) {
+            return message.message.imageMessage.caption;
+        }
+        
+        if (message.message.videoMessage?.caption) {
+            return message.message.videoMessage.caption;
+        }
+        
+        if (message.message.documentMessage?.caption) {
+            return message.message.documentMessage.caption;
+        }
+        
+        if (message.message.documentWithCaptionMessage?.message?.documentMessage?.caption) {
+            return message.message.documentWithCaptionMessage.message.documentMessage.caption;
+        }
+
         // Handle other message types if needed
         return null;
     }
