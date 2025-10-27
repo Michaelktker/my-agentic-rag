@@ -972,25 +972,32 @@ async def after_agent_callback(callback_context: CallbackContext) -> None:
     try:
         tool_name = getattr(callback_context, 'tool_name', None)
         result = getattr(callback_context, 'tool_result', None)
-        if tool_name == 'poll_fal_operation' and isinstance(result, str):
-            # Check if this is a timeout message (by unique phrase)
-            if "still being generated" in result and "I'll keep monitoring" in result:
-                import re
-                req_id_match = re.search(r'Request ID: ([^\n]+)', result)
-                status_url_match = re.search(r'Status URL: ([^\n]+)', result)
-                fal_request_id = req_id_match.group(1).strip() if req_id_match else "[unknown]"
-                final_status_url = status_url_match.group(1).strip() if status_url_match else "[unknown]"
-                enforced_message = (
-                    f"@Fal Your video/image is still being generated (taking longer than 90 seconds).\n\n"
-                    f"Video generation can take 2-5 minutes depending on the model and complexity.\n\n"
-                    f"Request ID: {fal_request_id}\n"
-                    f"Status URL: {final_status_url}\n\n"
-                    f"You can:\n\n"
-                    f"Wait a few minutes and ask me to check the status again\n"
-                    f"Check the status directly at: {final_status_url.replace('/status', '')}\n"
-                    f"I'll keep monitoring this in the background and will notify you when it's ready!"
-                )
-                callback_context.tool_result = enforced_message
+        
+        # Debug: log what we're getting
+        print(f"[CALLBACK DEBUG] Tool name: {tool_name}, Result type: {type(result)}")
+        if isinstance(result, str) and len(result) < 200:
+            print(f"[CALLBACK DEBUG] Result preview: {result[:200]}")
+        
+        # Check for timeout message from any FAL-related tool
+        if isinstance(result, str) and "still being generated" in result and "I'll keep monitoring" in result:
+            print(f"[CALLBACK DEBUG] Found timeout message, attempting to enforce scripted message")
+            import re
+            req_id_match = re.search(r'Request ID: ([^\n]+)', result)
+            status_url_match = re.search(r'Status URL: ([^\n]+)', result)
+            fal_request_id = req_id_match.group(1).strip() if req_id_match else "[unknown]"
+            final_status_url = status_url_match.group(1).strip() if status_url_match else "[unknown]"
+            enforced_message = (
+                f"@Fal Your video/image is still being generated (taking longer than 90 seconds).\n\n"
+                f"Video generation can take 2-5 minutes depending on the model and complexity.\n\n"
+                f"Request ID: {fal_request_id}\n"
+                f"Status URL: {final_status_url}\n\n"
+                f"You can:\n\n"
+                f"Wait a few minutes and ask me to check the status again\n"
+                f"Check the status directly at: {final_status_url.replace('/status', '')}\n"
+                f"I'll keep monitoring this in the background and will notify you when it's ready!"
+            )
+            callback_context.tool_result = enforced_message
+            print(f"[CALLBACK DEBUG] Enforced message set successfully")
     except Exception as e:
         print(f"[MENTION CHECK] Error in after_agent_callback (enforce timeout): {e}")
 
