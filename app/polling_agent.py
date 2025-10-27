@@ -184,8 +184,8 @@ async def poll_fal_operation(fal_request_id: str, submission_type: str = "text-t
             final_status_url = f"https://queue.fal.run/requests/{fal_request_id}/status"
             logger.warning(f"⚠️ No status_url or model_name provided, using fallback: {final_status_url}")
     
-    # Use unified timeout for both image and video generation (150 seconds)
-    max_attempts = 30  # 30 attempts × 5s = 150 seconds for both
+    # Use unified timeout for both image and video generation (90 seconds - before ADK timeout)
+    max_attempts = 18  # 18 attempts × 5s = 90 seconds for both (before ADK 120s timeout)
     
     # Create session with timeout
     timeout = aiohttp.ClientTimeout(total=30)  # 30 second timeout per request
@@ -276,7 +276,7 @@ async def poll_fal_operation(fal_request_id: str, submission_type: str = "text-t
         
         # Reached max attempts - return unified helpful message for both types
         timeout_result = (
-            f"@Fal Your video/image is still being generated (taking longer than 120 seconds).\n\n"
+            f"@Fal Your video/image is still being generated (taking longer than 90 seconds).\n\n"
             f"Video generation can take 2-5 minutes depending on the model and complexity.\n\n"
             f"Request ID: {fal_request_id}\n"
             f"Status URL: {final_status_url}\n\n"

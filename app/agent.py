@@ -981,7 +981,7 @@ async def after_agent_callback(callback_context: CallbackContext) -> None:
                 fal_request_id = req_id_match.group(1).strip() if req_id_match else "[unknown]"
                 final_status_url = status_url_match.group(1).strip() if status_url_match else "[unknown]"
                 enforced_message = (
-                    f"@Fal Your video/image is still being generated (taking longer than 120 seconds).\n\n"
+                    f"@Fal Your video/image is still being generated (taking longer than 90 seconds).\n\n"
                     f"Video generation can take 2-5 minutes depending on the model and complexity.\n\n"
                     f"Request ID: {fal_request_id}\n"
                     f"Status URL: {final_status_url}\n\n"
