@@ -254,6 +254,15 @@ We've resolved critical deployment issues that were preventing production deploy
 - **Benefits**: Secure API key storage with proper IAM permissions
 - **Components**: Terraform-managed secrets with version control
 
+#### ✅ **Agent Directory Configuration Fixed (October 27, 2025)**
+- **Problem**: Cloud Run couldn't find `root_agent` - ADK framework was searching in wrong directory
+- **Error**: `ValueError: No root_agent found for 'my-agentic-rag'`
+- **Root Cause**: `AGENT_DIR` in `server.py` pointed to `/code/my-agentic-rag` instead of `/code/my-agentic-rag/app`
+- **Solution**: Changed `AGENT_DIR = os.path.dirname(os.path.abspath(__file__))` to point to app directory
+- **Impact**: Cloud Run service now successfully loads and runs the agent
+- **Deployment**: Both staging and production environments deployed successfully
+- **Status**: ✅ WhatsApp bot now communicating properly with Cloud Run endpoint
+
 ### Core Components
 
 1. **WhatsApp Bot** (`index.js`)
