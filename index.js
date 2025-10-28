@@ -793,17 +793,8 @@ class WhatsAppBot {
                         }
                     });
                     
-                    if (mediaResult.converted) {
-                        if (mediaResult.originalFormat === 'XLSX') {
-                            await this.sendMessage(remoteJid, `📊 Excel file converted to text format for analysis: ${mediaResult.filename}`);
-                        } else if (mediaResult.originalFormat === 'DOCX') {
-                            await this.sendMessage(remoteJid, `📄 Word document converted to text format for analysis: ${mediaResult.filename}`);
-                        } else {
-                            await this.sendMessage(remoteJid, `🔄 ${mediaResult.originalFormat} file converted to text format: ${mediaResult.filename}`);
-                        }
-                    } else {
-                        await this.sendMessage(remoteJid, `✅ Uploaded ${mediaResult.filename} (${mediaResult.mimeType})`);
-                    }
+                    // Note: Upload confirmation messages removed per user request
+                    // Files are processed silently and sent directly to ADK
                     logger.info(`Media processed: ${mediaResult.filename} for ${userId}${mediaResult.converted ? ' [CONVERTED from ' + mediaResult.originalFormat + ']' : ''}`);
                 } catch (error) {
                     logger.error('Error processing media:', error);
@@ -815,14 +806,16 @@ class WhatsAppBot {
             // Prepare message for ADK (combine text and media)
             let adkMessage = messageText;
             
-            // Auto-trigger @Myker when media is uploaded
+            // Auto-trigger with appropriate mention when media is uploaded
             if (mediaParts.length > 0) {
+                const mentionTrigger = this.getMentionTrigger(remoteJid);
+                
                 if (!messageText) {
                     // Media only: Request immediate artifact saving and smart renaming
-                    adkMessage = `@Myker I've uploaded a media file "${uploadedFilename}". Please save this inline_data as an artifact first, then rename it with a smart descriptive filename based on what you see in the content.`;
+                    adkMessage = `${mentionTrigger} I've uploaded a media file "${uploadedFilename}". Please save this inline_data as an artifact first, then rename it with a smart descriptive filename based on what you see in the content.`;
                 } else {
                     // Media + text: Single cohesive workflow instruction
-                    adkMessage = `@Myker Please help me with this image-based request: ${messageText}
+                    adkMessage = `${mentionTrigger} Please help me with this image-based request: ${messageText}
 
 I've uploaded an image "${uploadedFilename}" that you'll need for this task. Please first save it as an artifact, rename it descriptively, and make it public to get a URL. Then use that public URL to complete my request.`;
                 }
@@ -1314,9 +1307,9 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
         try {
             logger.info(`ADK Non-Streaming Response: ${JSON.stringify(data)}`);
             
-            // Handle empty response (happens when no @Myker mention) - ignore silently
+            // Handle empty response (happens when no valid mention) - ignore silently
             if (!data || (Array.isArray(data) && data.length === 0)) {
-                logger.info('Empty ADK response (likely no @Myker mention) - ignoring message silently');
+                logger.info('Empty ADK response (likely no valid mention) - ignoring message silently');
                 return null; // Return null to indicate no response should be sent
             }
             
@@ -1489,6 +1482,22 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
     getUserIdFromJid(jid) {
         // Extract userId from WhatsApp JID (e.g., "6592377976@s.whatsapp.net" -> "6592377976@s.whatsapp.net")
         return jid;
+    }
+
+    /**
+     * Get the appropriate mention trigger based on the sender's JID
+     * Uses @92033062547666 for that specific number, @Myker for all others
+     */
+    getMentionTrigger(jid) {
+        // Extract phone number from JID (e.g., "92033062547666@s.whatsapp.net" -> "92033062547666")
+        const phoneNumber = jid.split('@')[0];
+        
+        // Use phone number mention for this specific number, @Myker for others
+        if (phoneNumber === '92033062547666') {
+            return '@92033062547666';
+        }
+        
+        return '@Myker';
     }
 
     parseADKResponse(data) {

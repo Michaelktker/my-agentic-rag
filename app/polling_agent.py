@@ -214,7 +214,7 @@ async def poll_fal_operation(fal_request_id: str, submission_type: str = "text-t
                                     if submission_type == "text-to-video":
                                         video_url = result_data.get("video", {}).get("url")
                                         if video_url:
-                                            final_result = f"✅ Video generated successfully! 🎬\n\n**Video URL:** {video_url}\n\nYou can download or view the video at this link."
+                                            final_result = f"🎬 {video_url}"
                                             logger.info(f"🎬 Returning video result: {final_result}")
                                             return final_result
                                         else:
@@ -227,7 +227,7 @@ async def poll_fal_operation(fal_request_id: str, submission_type: str = "text-t
                                         if images and len(images) > 0:
                                             image_url = images[0].get("url")
                                             if image_url:
-                                                final_result = f"✅ Image generated successfully! 🖼️\n\n**Image URL:** {image_url}\n\nYou can view the image at this link."
+                                                final_result = f"🖼️ {image_url}"
                                                 logger.info(f"🖼️ Returning image result: {final_result}")
                                                 return final_result
                                         
@@ -276,7 +276,7 @@ async def poll_fal_operation(fal_request_id: str, submission_type: str = "text-t
                     logger.error(error_result)
                     return error_result
         
-        # Reached max attempts - return unified helpful message for both types
+        # Reached max attempts - return concise status message
         timeout_result = (
             f"@Fal Your video/image is still being generated (taking longer than 90 seconds).\n\n"
             f"Video generation can take 2-5 minutes depending on the model and complexity.\n\n"
@@ -303,13 +303,15 @@ polling_agent = Agent(
     1. Take status_url and response_url from a queued FAL operation
     2. Poll the status_url until the operation completes
     3. Retrieve the final result from response_url when ready
-    4. Return the result to the parent agent
+    4. Return the result to the parent agent with minimal formatting
     
     When you receive a request to poll a FAL operation:
     - Extract the fal_request_id and submission_type from the conversation
     - Use the poll_fal_operation tool with the fal_request_id and submission_type
     - The tool will handle all the polling logic and return when complete
-    - Report the final result clearly to the user
+    - For successful results: return just the URL with a simple emoji (🎬 for video, 🖼️ for image)
+    - For errors: provide clear error information
+    - Keep messages succinct and focused
     
     Be patient - some operations may take several minutes to complete.
     """,

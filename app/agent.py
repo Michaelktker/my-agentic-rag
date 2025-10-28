@@ -42,20 +42,28 @@ from langchain_google_vertexai import VertexAIEmbeddings
 
 def has_myker_mention(text: str) -> bool:
     """
-    Check if the text contains a @Myker mention (case-insensitive).
+    Check if the text contains a @Myker mention or phone number mention (case-insensitive).
     
     Args:
         text (str): The text to check for mentions
         
     Returns:
-        bool: True if @Myker mention is found, False otherwise
+        bool: True if @Myker or @92033062547666 mention is found, False otherwise
     """
     if not text:
         return False
     
-    # Use regex to find @Myker mentions (case-insensitive)
-    pattern = r'@myker\b'
-    return bool(re.search(pattern, text, re.IGNORECASE))
+    # Use regex to find @Myker or phone number mentions (case-insensitive)
+    patterns = [
+        r'@myker\b',                # Original @myker mention
+        r'@92033062547666\b'        # Phone number mention
+    ]
+    
+    for pattern in patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            return True
+    
+    return False
 
 
 from app.retrievers import get_compressor, get_retriever
@@ -449,7 +457,7 @@ DO NOT try to poll yourself - just return the information and let the parent age
 
 instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis, PLUS image generation via multiple sources.
 
-**IMPORTANT**: You are activated via @Myker mentions. The mention is automatically detected and removed from messages before you see them, so you don't need to check for it - just respond naturally to all requests you receive.
+**IMPORTANT**: You are activated via @Myker mentions or @92033062547666 mentions. The mention is automatically detected and removed from messages before you see them, so you don't need to check for it - just respond naturally to all requests you receive.
 
 Answer to the best of your ability using the context provided and leverage the tools available to you.
 
@@ -956,9 +964,9 @@ from app.polling_agent import poll_fal_operation
 poll_fal_tool = FunctionTool(func=poll_fal_operation)
 
 
-# Mention checking callbacks for @Myker
+# Mention checking callbacks for @Myker and phone number
 async def before_agent_callback(callback_context: CallbackContext) -> None:
-    """Check if message contains @Myker mention before processing."""
+    """Check if message contains @Myker or @92033062547666 mention before processing."""
     try:
         # Get the current user message from invocation context
         user_content = callback_context._invocation_context.user_content
@@ -973,12 +981,12 @@ async def before_agent_callback(callback_context: CallbackContext) -> None:
             message_text = message_text.strip()
             print(f"[MENTION CHECK] Checking message: {message_text}")
             
-            # Check for @Myker mention
+            # Check for @Myker or phone number mention
             if not has_myker_mention(message_text):
-                print("[MENTION CHECK] No @Myker mention found - ending invocation")
+                print("[MENTION CHECK] No @Myker or @92033062547666 mention found - ending invocation")
                 callback_context._invocation_context.end_invocation = True
             else:
-                print("[MENTION CHECK] @Myker mention found - proceeding with agent")
+                print("[MENTION CHECK] Valid mention found - proceeding with agent")
                 
     except Exception as e:
         print(f"[MENTION CHECK] Error in before_agent_callback: {e}")
