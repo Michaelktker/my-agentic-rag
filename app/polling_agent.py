@@ -221,6 +221,32 @@ async def poll_fal_operation(fal_request_id: str, submission_type: str = "text-t
                                             error_result = f"❌ Error: No video URL found in result: {result_data}"
                                             logger.error(error_result)
                                             return error_result
+                                    elif submission_type in ["text-to-audio", "text-to-music", "audio-generation"]:
+                                        # Handle audio results - try multiple possible response formats
+                                        audio_url = None
+                                        
+                                        # Try different possible audio response formats
+                                        if "audio_url" in result_data:
+                                            audio_url = result_data["audio_url"]
+                                        elif "audio" in result_data:
+                                            if isinstance(result_data["audio"], dict) and "url" in result_data["audio"]:
+                                                audio_url = result_data["audio"]["url"]
+                                            elif isinstance(result_data["audio"], str):
+                                                audio_url = result_data["audio"]
+                                        elif "url" in result_data:
+                                            # Some models return direct URL
+                                            audio_url = result_data["url"]
+                                        elif "output_url" in result_data:
+                                            audio_url = result_data["output_url"]
+                                        
+                                        if audio_url:
+                                            final_result = f"🎵 {audio_url}"
+                                            logger.info(f"🎵 Returning audio result: {final_result}")
+                                            return final_result
+                                        else:
+                                            error_result = f"❌ Error: No audio URL found in result: {result_data}"
+                                            logger.error(error_result)
+                                            return error_result
                                     else:
                                         # Handle image results
                                         images = result_data.get("images", [])
@@ -309,7 +335,7 @@ polling_agent = Agent(
     - Extract the fal_request_id and submission_type from the conversation
     - Use the poll_fal_operation tool with the fal_request_id and submission_type
     - The tool will handle all the polling logic and return when complete
-    - For successful results: return just the URL with a simple emoji (🎬 for video, 🖼️ for image)
+    - For successful results: return just the URL with a simple emoji (🎬 for video, 🖼️ for image, 🎵 for audio)
     - For errors: provide clear error information
     - Keep messages succinct and focused
     
