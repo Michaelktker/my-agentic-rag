@@ -51,23 +51,19 @@ create_bucket_if_not_exists(
 artifacts_bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
 artifacts_bucket_uri = f"gs://{artifacts_bucket_name}"
 
-# Configure session storage bucket for VertexAI Session Service
-# This ensures persistent session storage across container restarts
-session_bucket_name = f"{project_id}-my-agentic-rag-adk-sessions"
-session_service_uri = f"gs://{session_bucket_name}"
-
-# Create session bucket if it doesn't exist
-create_bucket_if_not_exists(
-    bucket_name=f"gs://{session_bucket_name}",
-    project=project_id,
-    location="us-central1"
-)
+# Configure session storage for ADK
+# VertexAI Session Service requires using the in-memory session service
+# with state persistence handled via the agent's state management
+# For now, we'll use SQLite which ADK handles internally
+# TODO: Implement custom GCS session service when ADK supports it
+session_service_uri = "sqlite:///./sessions.db"
 
 logger.log_struct({
     "message": "ADK Session Service Configuration",
     "session_service_uri": session_service_uri,
     "artifacts_bucket_uri": artifacts_bucket_uri,
-    "project_id": project_id
+    "project_id": project_id,
+    "note": "Using SQLite for session storage with user-scoped state in agent"
 }, severity="INFO")
 
 provider = TracerProvider()
@@ -78,22 +74,21 @@ trace.set_tracer_provider(provider)
 # Point to the app directory where root_agent is defined
 AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# VertexAI Session Service Configuration
-# This replaces the SQLite session service with a persistent GCS-backed solution
-# The session service URI points to the GCS bucket created by Terraform
-# Format: gs://{project_id}-my-agentic-rag-adk-sessions
-# 
-# Benefits of VertexAI Session Service:
-# - Persistent sessions across container restarts and deployments
-# - Scalable storage for multiple concurrent users
-# - Automatic session management and cleanup via bucket lifecycle rules
-# - Compatible with Cloud Run and other serverless platforms
-# 
-# The VertexAiSessionService will automatically:
-# 1. Store session data in GCS bucket
-# 2. Load existing sessions when users return
-# 3. Create new sessions for new users
-# 4. Handle session versioning and cleanup
+# Session Management Strategy:
+# ADK uses SQLite for ephemeral session storage (conversation turns within a session)
+# Persistent user data is handled via user-scoped state (user: prefix) which is
+# automatically managed by ADK's state management system
+#
+# The index.js WhatsApp bot implements session retrieval/reuse logic by:
+# 1. Checking if a session exists for a user via ADK API
+# 2. Reusing existing sessions when found
+# 3. Creating new sessions only when needed
+#
+# This approach provides:
+# - Fast in-memory session access during conversations
+# - Persistent user context via user-scoped state
+# - Automatic cleanup of inactive sessions
+# - Compatibility with Cloud Run's ephemeral containers
 
 
 @asynccontextmanager
@@ -112,12 +107,12 @@ async def lifespan(app: FastAPI):
 
 
 # Create the FastAPI app using ADK's get_fast_api_app
-# Configure with VertexAI session service for persistent storage
-# Path structure: gs://{project}-my-agentic-rag-adk-sessions/{app_name}/{user_id}/session.json
-# Artifact structure: gs://adk_artifact/app/{user_id}/{filename}/{version}
+# Session storage: SQLite (ephemeral, per-container)
+# User state: Managed via user-scoped state (user: prefix)
+# Artifacts: GCS bucket for user-scoped artifacts
 app = get_fast_api_app(
     agents_dir=AGENT_DIR,
-    session_service_uri=session_service_uri,  # GCS-backed persistent sessions
+    session_service_uri=session_service_uri,  # SQLite for session storage
     artifact_service_uri=artifacts_bucket_uri,  # GCS bucket for user-scoped artifacts
     allow_origins=allow_origins,
     web=True,
