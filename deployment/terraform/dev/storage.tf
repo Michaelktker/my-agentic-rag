@@ -37,6 +37,34 @@ resource "google_storage_bucket" "data_ingestion_PIPELINE_GCS_ROOT" {
   depends_on = [resource.google_project_service.services]
 }
 
+# ADK Session Storage Bucket for VertexAI Session Service (Dev Environment)
+# This bucket stores persistent session data for the ADK agent in development
+resource "google_storage_bucket" "adk_session_storage_dev" {
+  name                        = "${var.dev_project_id}-${var.project_name}-adk-sessions"
+  location                    = var.region
+  project                     = var.dev_project_id
+  uniform_bucket_level_access = true
+  force_destroy               = true  # Allow destruction in dev
+  
+  # Enable versioning for session data protection
+  versioning {
+    enabled = true
+  }
+  
+  # Lifecycle rule to clean up old sessions after 30 days (shorter for dev)
+  lifecycle_rule {
+    condition {
+      age = 30
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  depends_on = [resource.google_project_service.services]
+}
+
+
 
 resource "google_discovery_engine_data_store" "data_store_dev" {
   location                    = var.data_store_region

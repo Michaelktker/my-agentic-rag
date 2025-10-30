@@ -51,6 +51,25 @@ create_bucket_if_not_exists(
 artifacts_bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
 artifacts_bucket_uri = f"gs://{artifacts_bucket_name}"
 
+# Configure session storage bucket for VertexAI Session Service
+# This ensures persistent session storage across container restarts
+session_bucket_name = f"{project_id}-my-agentic-rag-adk-sessions"
+session_service_uri = f"gs://{session_bucket_name}"
+
+# Create session bucket if it doesn't exist
+create_bucket_if_not_exists(
+    bucket_name=f"gs://{session_bucket_name}",
+    project=project_id,
+    location="us-central1"
+)
+
+logger.log_struct({
+    "message": "ADK Session Service Configuration",
+    "session_service_uri": session_service_uri,
+    "artifacts_bucket_uri": artifacts_bucket_uri,
+    "project_id": project_id
+}, severity="INFO")
+
 provider = TracerProvider()
 processor = export.BatchSpanProcessor(CloudTraceLoggingSpanExporter())
 provider.add_span_processor(processor)
@@ -58,22 +77,23 @@ trace.set_tracer_provider(provider)
 
 # Point to the app directory where root_agent is defined
 AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
-# Agent Engine session configuration - commented out for dev testing
-# Use environment variable for agent name, default to project name
-# agent_name = os.environ.get("AGENT_ENGINE_SESSION_NAME", "my-agentic-rag")
 
-# Check if an agent with this name already exists
-# existing_agents = list(agent_engines.list(filter=f"display_name={agent_name}"))
-
-# if existing_agents:
-#     # Use the existing agent
-#     agent_engine = existing_agents[0]
-# else:
-#     # Create a new agent if none exists
-#     agent_engine = agent_engines.create(display_name=agent_name)
-
-# Use in-memory session service for dev/testing
-# session_service_uri = f"agentengine://{agent_engine.resource_name}"
+# VertexAI Session Service Configuration
+# This replaces the SQLite session service with a persistent GCS-backed solution
+# The session service URI points to the GCS bucket created by Terraform
+# Format: gs://{project_id}-my-agentic-rag-adk-sessions
+# 
+# Benefits of VertexAI Session Service:
+# - Persistent sessions across container restarts and deployments
+# - Scalable storage for multiple concurrent users
+# - Automatic session management and cleanup via bucket lifecycle rules
+# - Compatible with Cloud Run and other serverless platforms
+# 
+# The VertexAiSessionService will automatically:
+# 1. Store session data in GCS bucket
+# 2. Load existing sessions when users return
+# 3. Create new sessions for new users
+# 4. Handle session versioning and cleanup
 
 
 @asynccontextmanager
@@ -81,6 +101,9 @@ async def lifespan(app: FastAPI):
     """Handle startup and shutdown events for the FastAPI app."""
     # Startup
     print("🚀 FastAPI server starting up...")
+    print(f"📦 Session Service: {session_service_uri}")
+    print(f"📦 Artifact Service: {artifacts_bucket_uri}")
+    print(f"🏗️  Agent Directory: {AGENT_DIR}")
     
     yield
     
@@ -89,12 +112,12 @@ async def lifespan(app: FastAPI):
 
 
 # Create the FastAPI app using ADK's get_fast_api_app
-# Configure artifact service with user-scoped GCS paths (ADK best practice)
-# Path structure: gs://bucket_name/app/{user_id}/{filename}/{version}
-# This allows artifacts to persist across different sessions for the same user
+# Configure with VertexAI session service for persistent storage
+# Path structure: gs://{project}-my-agentic-rag-adk-sessions/{app_name}/{user_id}/session.json
+# Artifact structure: gs://adk_artifact/app/{user_id}/{filename}/{version}
 app = get_fast_api_app(
     agents_dir=AGENT_DIR,
-    session_service_uri="sqlite:///./sessions.db",
+    session_service_uri=session_service_uri,  # GCS-backed persistent sessions
     artifact_service_uri=artifacts_bucket_uri,  # GCS bucket for user-scoped artifacts
     allow_origins=allow_origins,
     web=True,

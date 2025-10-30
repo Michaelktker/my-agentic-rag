@@ -691,6 +691,11 @@ class WhatsAppBot {
             const remoteJid = message.key.remoteJid;
             const userId = remoteJid; // Use remoteJid as userId for ADK session
             
+            // Extract user's display name (pushName) from the message
+            // This is the name the sender has set in their WhatsApp profile
+            const userName = message.pushName || remoteJid.split('@')[0];
+            logger.info(`User name detected: ${userName}`);
+            
             // Check if message contains media
             const hasMedia = this.mediaHandler.hasMedia(message);
             const messageText = this.extractMessageText(message);
@@ -719,60 +724,34 @@ class WhatsAppBot {
 
             logger.info(`Received message from ${remoteJid}${hasMedia ? ' with media' : ''}: ${messageText || '[media only]'}`);
 
-            // Create or get session for this user using persistent storage
+            // Create or get session for this user with VertexAI persistent sessions
+            // VertexAI Session Service automatically handles:
+            // 1. Retrieving existing sessions from GCS
+            // 2. Creating new sessions if none exist
+            // 3. Persisting session state across restarts
             let session = this.activeSessions.get(userId);
             if (!session) {
-                // Check if user exists in Google Storage
-                const existingSession = await this.sessionManager.getUserSession(userId);
-                
-                // Always create a new ADK session (ADK sessions are ephemeral)
+                // Try to get or create ADK session (VertexAI session service handles persistence)
+                // The createADKSession method now checks for existing sessions first
                 const adkSessionId = await this.createADKSession(userId);
                 if (!adkSessionId) {
-                    await this.sendMessage(remoteJid, 'Sorry, I\'m unable to create a new conversation session right now. Please try again later.');
+                    await this.sendMessage(remoteJid, 'Sorry, I\'m unable to access your conversation session right now. Please try again later.');
                     return;
                 }
                 
-                if (existingSession) {
-                    // Existing user - create new ADK session but keep user context
-                    session = {
-                        sessionId: adkSessionId,
-                        userId: userId,
-                        createdAt: new Date(),
-                        lastActivity: new Date(),
-                        isReturningUser: true
-                    };
-                    
-                    // Update session storage with new ADK session ID
-                    await this.sessionManager.storeUserSession(userId, adkSessionId, {
-                        isReturningUser: true,
-                        previousSessionDate: existingSession.createdAt
-                    });
-                    
-                    logger.info(`Created new ADK session ${session.sessionId} for returning user ${userId}`);
-                } else {
-                    // New user - create new ADK session
-                    session = {
-                        sessionId: adkSessionId,
-                        userId: userId,
-                        createdAt: new Date(),
-                        lastActivity: new Date(),
-                        isReturningUser: false
-                    };
-                    
-                    // Store new session in GCS
-                    await this.sessionManager.storeUserSession(userId, adkSessionId, {
-                        isNewUser: true,
-                        firstMessage: messageText || '[media]'
-                    });
-                    
-                    logger.info(`Created new session ${session.sessionId} for new user ${userId}`);
-                }
+                // Create in-memory session reference (actual session data is in GCS via VertexAI)
+                session = {
+                    sessionId: adkSessionId,
+                    userId: userId,
+                    createdAt: new Date(),
+                    lastActivity: new Date()
+                };
                 
                 this.activeSessions.set(userId, session);
+                logger.info(`Using ADK session ${session.sessionId} for user ${userId} (VertexAI persistent storage)`);
             } else {
                 session.lastActivity = new Date();
-                // Update activity in storage for existing in-memory session
-                await this.sessionManager.updateUserActivity(userId);
+                logger.debug(`Reusing in-memory session ${session.sessionId} for user ${userId}`);
             }
 
             // Process media if present
@@ -828,8 +807,8 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
             // }
 
             // Send message to ADK with streaming (including media parts)
-            logger.info(`🚀 Sending to ADK: message="${adkMessage}", mediaParts=${mediaParts.length}, session=${session.sessionId}`);
-            const response = await this.sendToADK(adkMessage, session.sessionId, userId, remoteJid, mediaParts);
+            logger.info(`🚀 Sending to ADK: message="${adkMessage}", mediaParts=${mediaParts.length}, session=${session.sessionId}, userName="${userName}"`);
+            const response = await this.sendToADK(adkMessage, session.sessionId, userId, remoteJid, mediaParts, userName);
             logger.info(`📨 ADK Response received: ${response ? 'Success' : 'No response'}`);
             
             if (response) {
@@ -954,8 +933,62 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
         return null;
     }
 
+    /**
+     * Get existing ADK session for a user or null if none exists
+     */
+    async getExistingADKSession(userId) {
+        try {
+            // Get the active ADK endpoint
+            const adkUrl = await getActiveAdkEndpoint();
+            
+            logger.info(`🔍 Checking for existing ADK sessions for user: ${userId}`);
+
+            // Get list of sessions for this user
+            const response = await axios.get(
+                `${adkUrl}/apps/${ADK_APP_NAME}/users/${encodeURIComponent(userId)}/sessions`,
+                {
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    timeout: config.adk.timeout,
+                    validateStatus: function (status) {
+                        return status >= 200 && status < 600;
+                    }
+                }
+            );
+
+            if (response.status === 200 && response.data && response.data.sessions) {
+                const sessions = response.data.sessions;
+                
+                if (sessions.length > 0) {
+                    // Get the most recent session
+                    const mostRecentSession = sessions[sessions.length - 1];
+                    logger.info(`✅ Found existing session: ${mostRecentSession.id} for user: ${userId}`);
+                    return mostRecentSession.id;
+                } else {
+                    logger.info(`📭 No existing sessions found for user: ${userId}`);
+                    return null;
+                }
+            } else {
+                logger.warn(`Could not retrieve sessions: ${response.status}`);
+                return null;
+            }
+        } catch (error) {
+            // If endpoint doesn't support session listing or user has no sessions, that's ok
+            logger.debug(`Could not check existing sessions: ${error.message}`);
+            return null;
+        }
+    }
+
     async createADKSession(userId) {
         try {
+            // First, check if user already has an existing session
+            const existingSessionId = await this.getExistingADKSession(userId);
+            if (existingSessionId) {
+                logger.info(`♻️  Reusing existing ADK session: ${existingSessionId} for user: ${userId}`);
+                return existingSessionId;
+            }
+            
             // Get the active ADK endpoint
             const adkUrl = await getActiveAdkEndpoint();
             
@@ -981,7 +1014,7 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
                 events: null
             };
 
-            logger.info(`📤 Creating ADK session for user: ${userId} using endpoint: ${adkUrl}`);
+            logger.info(`📤 Creating new ADK session for user: ${userId} using endpoint: ${adkUrl}`);
 
             const response = await axios.post(`${adkUrl}/apps/${ADK_APP_NAME}/users/${encodeURIComponent(userId)}/sessions`, payload, {
                 headers: {
@@ -994,7 +1027,7 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
             });
 
             if (response.status === 200 && response.data.id) {
-                logger.info(`✅ Created ADK session: ${response.data.id} for user: ${userId}`);
+                logger.info(`✅ Created new ADK session: ${response.data.id} for user: ${userId}`);
                 
                 // If this is a returning user, increment their session count
                 await this.updateReturnUserState(response.data.id, userId);
@@ -1098,15 +1131,23 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
         }
     }
 
-    async sendToADK(message, sessionId, userId, jid, mediaParts = []) {
+    async sendToADK(message, sessionId, userId, jid, mediaParts = [], userName = null) {
         try {
             // Get the active ADK endpoint
             const adkUrl = await getActiveAdkEndpoint();
             
+            // Prepend username to the message if available
+            // This helps the ADK agent understand who is sending the message in group chats
+            let formattedMessage = message;
+            if (userName && userName !== userId) {
+                // Only prepend username if it's different from userId (to avoid redundancy)
+                formattedMessage = `${userName}: ${message}`;
+            }
+            
             // Prepare message parts (text + media)
             const parts = [
                 {
-                    text: message
+                    text: formattedMessage
                 }
             ];
             
@@ -1158,7 +1199,7 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
                     }
                     
                     // Retry request
-                    return await this.sendToADK(message, newSessionId, userId, jid, mediaParts);
+                    return await this.sendToADK(message, newSessionId, userId, jid, mediaParts, userName);
                 }
                 
                 logger.error(`ADK Service Error: Unable to create new session`);

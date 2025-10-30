@@ -59,6 +59,35 @@ resource "google_storage_bucket" "data_ingestion_pipeline_gcs_root" {
   depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.deploy_project_services]
 }
 
+# ADK Session Storage Buckets for VertexAI Session Service
+# These buckets store persistent session data for the ADK agent
+resource "google_storage_bucket" "adk_session_storage" {
+  for_each                    = local.deploy_project_ids
+  name                        = "${each.value}-${var.project_name}-adk-sessions"
+  location                    = var.region
+  project                     = each.value
+  uniform_bucket_level_access = true
+  force_destroy               = false  # Don't destroy session data accidentally
+  
+  # Enable versioning for session data protection
+  versioning {
+    enabled = true
+  }
+  
+  # Lifecycle rule to clean up old sessions after 90 days
+  lifecycle_rule {
+    condition {
+      age = 90
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  depends_on = [resource.google_project_service.cicd_services, resource.google_project_service.deploy_project_services]
+}
+
+
 
 
 resource "google_discovery_engine_data_store" "data_store_staging" {
