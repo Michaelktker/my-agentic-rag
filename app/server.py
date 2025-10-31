@@ -51,19 +51,25 @@ create_bucket_if_not_exists(
 artifacts_bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
 artifacts_bucket_uri = f"gs://{artifacts_bucket_name}"
 
-# Configure session storage for ADK
-# VertexAI Session Service requires using the in-memory session service
-# with state persistence handled via the agent's state management
-# For now, we'll use SQLite which ADK handles internally
-# TODO: Implement custom GCS session service when ADK supports it
-session_service_uri = "sqlite:///./sessions.db"
+# Configure session storage for ADK using VertexAI Session Service (GCS-backed)
+# This provides persistent session storage across container restarts and deployments
+session_bucket_name = f"{project_id}-my-agentic-rag-adk-sessions"
+session_service_uri = f"gs://{session_bucket_name}"
+
+# Create session bucket if it doesn't exist (for local development)
+# In production, this bucket is created by Terraform
+create_bucket_if_not_exists(
+    bucket_name=session_service_uri,
+    project=project_id,
+    location="us-central1"
+)
 
 logger.log_struct({
     "message": "ADK Session Service Configuration",
     "session_service_uri": session_service_uri,
     "artifacts_bucket_uri": artifacts_bucket_uri,
     "project_id": project_id,
-    "note": "Using SQLite for session storage with user-scoped state in agent"
+    "note": "Using GCS-backed VertexAI Session Service for persistent session storage"
 }, severity="INFO")
 
 provider = TracerProvider()
@@ -75,20 +81,20 @@ trace.set_tracer_provider(provider)
 AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Session Management Strategy:
-# ADK uses SQLite for ephemeral session storage (conversation turns within a session)
-# Persistent user data is handled via user-scoped state (user: prefix) which is
-# automatically managed by ADK's state management system
+# ADK uses GCS-backed VertexAI Session Service for persistent session storage
+# This provides:
+# - Persistent sessions across container restarts and deployments
+# - Scalable storage for multiple concurrent users
+# - Automatic session management via GCS lifecycle rules (90-day retention)
+# - Cloud Run compatibility for serverless deployments
 #
 # The index.js WhatsApp bot implements session retrieval/reuse logic by:
-# 1. Checking if a session exists for a user via ADK API
-# 2. Reusing existing sessions when found
+# 1. Checking if a session exists for a user via ADK API (getExistingADKSession)
+# 2. Reusing existing sessions when found (persistent across restarts)
 # 3. Creating new sessions only when needed
 #
-# This approach provides:
-# - Fast in-memory session access during conversations
-# - Persistent user context via user-scoped state
-# - Automatic cleanup of inactive sessions
-# - Compatibility with Cloud Run's ephemeral containers
+# Session data is stored in GCS bucket: {project_id}-my-agentic-rag-adk-sessions
+# Path structure: {app_name}/{user_id}/session.json
 
 
 @asynccontextmanager
@@ -96,7 +102,7 @@ async def lifespan(app: FastAPI):
     """Handle startup and shutdown events for the FastAPI app."""
     # Startup
     print("🚀 FastAPI server starting up...")
-    print(f"📦 Session Service: {session_service_uri}")
+    print(f"📦 Session Service: {session_service_uri} (GCS-backed VertexAI Session Service)")
     print(f"📦 Artifact Service: {artifacts_bucket_uri}")
     print(f"🏗️  Agent Directory: {AGENT_DIR}")
     
@@ -107,12 +113,12 @@ async def lifespan(app: FastAPI):
 
 
 # Create the FastAPI app using ADK's get_fast_api_app
-# Session storage: SQLite (ephemeral, per-container)
+# Session storage: GCS-backed VertexAI Session Service (persistent across restarts)
 # User state: Managed via user-scoped state (user: prefix)
 # Artifacts: GCS bucket for user-scoped artifacts
 app = get_fast_api_app(
     agents_dir=AGENT_DIR,
-    session_service_uri=session_service_uri,  # SQLite for session storage
+    session_service_uri=session_service_uri,  # GCS-backed persistent sessions
     artifact_service_uri=artifacts_bucket_uri,  # GCS bucket for user-scoped artifacts
     allow_origins=allow_origins,
     web=True,
