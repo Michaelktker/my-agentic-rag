@@ -957,13 +957,13 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
                 }
             );
 
-            if (response.status === 200 && response.data && response.data.sessions) {
-                const sessions = response.data.sessions;
+            if (response.status === 200 && response.data) {
+                const sessions = Array.isArray(response.data) ? response.data : response.data.sessions || [];
                 
                 if (sessions.length > 0) {
                     // Get the most recent session
                     const mostRecentSession = sessions[sessions.length - 1];
-                    logger.info(`✅ Found existing session: ${mostRecentSession.id} for user: ${userId}`);
+                    logger.info(`♻️ Reusing existing ADK session: ${mostRecentSession.id} for user: ${userId}`);
                     return mostRecentSession.id;
                 } else {
                     logger.info(`📭 No existing sessions found for user: ${userId}`);
