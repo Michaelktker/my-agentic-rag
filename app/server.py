@@ -51,12 +51,28 @@ create_bucket_if_not_exists(
 artifacts_bucket_name = os.getenv("ARTIFACTS_BUCKET_NAME", "adk_artifact")
 artifacts_bucket_uri = f"gs://{artifacts_bucket_name}"
 
-# Configure session storage bucket for VertexAI Session Service
-# This ensures persistent session storage across container restarts
-session_bucket_name = f"{project_id}-my-agentic-rag-adk-sessions"
-session_service_uri = f"gs://{session_bucket_name}"
+# Session Service Configuration
+# ADK's get_fast_api_app() expects a database connection string for session_service_uri
+# 
+# Options for session persistence:
+# 1. SQLite: "sqlite:///./sessions.db" - Ephemeral (lost on container restart)
+# 2. PostgreSQL: "postgresql://..." - Fully persistent (recommended for production)
+# 3. MySQL: "mysql://..." - Fully persistent alternative
+#
+# Production approach: Cloud SQL PostgreSQL for persistent session storage
+# - Connection string provided via DB_CONNECTION_STRING environment variable
+# - Format: postgresql://user:pass@/dbname?host=/cloudsql/project:region:instance
+# - Sessions persist across container restarts and deployments
+# - Scalable and production-ready
+#
+# Development fallback: SQLite if DB_CONNECTION_STRING not set
+session_service_uri = os.getenv(
+    "DB_CONNECTION_STRING",
+    "sqlite:///./sessions.db"  # Fallback for local development
+)
 
-# Create session bucket if it doesn't exist
+# GCS buckets for artifact storage
+session_bucket_name = f"{project_id}-my-agentic-rag-adk-sessions"
 create_bucket_if_not_exists(
     bucket_name=f"gs://{session_bucket_name}",
     project=project_id,
@@ -65,8 +81,11 @@ create_bucket_if_not_exists(
 
 logger.log_struct({
     "message": "ADK Session Service Configuration",
-    "session_service_uri": session_service_uri,
+    "session_service_type": "Cloud SQL PostgreSQL" if "postgresql://" in session_service_uri else "SQLite (ephemeral)",
+    "session_service_uri_masked": session_service_uri.split("@")[0] + "@***" if "@" in session_service_uri else session_service_uri,
     "artifacts_bucket_uri": artifacts_bucket_uri,
+    "gcs_session_bucket": session_bucket_name,
+    "persistence": "Fully persistent" if "postgresql://" in session_service_uri else "Ephemeral",
     "project_id": project_id
 }, severity="INFO")
 
@@ -78,32 +97,18 @@ trace.set_tracer_provider(provider)
 # Point to the app directory where root_agent is defined
 AGENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# VertexAI Session Service Configuration
-# This replaces the SQLite session service with a persistent GCS-backed solution
-# The session service URI points to the GCS bucket created by Terraform
-# Format: gs://{project_id}-my-agentic-rag-adk-sessions
-# 
-# Benefits of VertexAI Session Service:
-# - Persistent sessions across container restarts and deployments
-# - Scalable storage for multiple concurrent users
-# - Automatic session management and cleanup via bucket lifecycle rules
-# - Compatible with Cloud Run and other serverless platforms
-# 
-# The VertexAiSessionService will automatically:
-# 1. Store session data in GCS bucket
-# 2. Load existing sessions when users return
-# 3. Create new sessions for new users
-# 4. Handle session versioning and cleanup
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events for the FastAPI app."""
     # Startup
     print("🚀 FastAPI server starting up...")
-    print(f"📦 Session Service: {session_service_uri}")
+    print(f"📦 Session Service: {session_service_uri.split('@')[0] + '@***' if '@' in session_service_uri else session_service_uri}")
+    print(f"   Type: {'PostgreSQL (Persistent)' if 'postgresql://' in session_service_uri else 'SQLite (Ephemeral)'}")
     print(f"📦 Artifact Service: {artifacts_bucket_uri}")
     print(f"🏗️  Agent Directory: {AGENT_DIR}")
+    if "postgresql://" not in session_service_uri:
+        print(f"💾 GCS Session Bucket (reserved): {session_bucket_name}")
     
     yield
     
@@ -112,12 +117,21 @@ async def lifespan(app: FastAPI):
 
 
 # Create the FastAPI app using ADK's get_fast_api_app
-# Configure with VertexAI session service for persistent storage
-# Path structure: gs://{project}-my-agentic-rag-adk-sessions/{app_name}/{user_id}/session.json
-# Artifact structure: gs://adk_artifact/app/{user_id}/{filename}/{version}
+# 
+# Session Management Strategy:
+# - Cloud SQL PostgreSQL for persistent session storage (production)
+# - Connection via Unix socket: /cloudsql/project:region:instance
+# - Sessions survive container restarts, deployments, and scaling
+# - SQLite fallback for local development without Cloud SQL
+#
+# Why PostgreSQL?
+# - Fully persistent across all container lifecycle events
+# - Scales horizontally with multiple Cloud Run instances
+# - Managed service with automatic backups and HA (production)
+# - Standard database URL format supported by ADK
 app = get_fast_api_app(
     agents_dir=AGENT_DIR,
-    session_service_uri=session_service_uri,  # GCS-backed persistent sessions
+    session_service_uri=session_service_uri,  # PostgreSQL or SQLite
     artifact_service_uri=artifacts_bucket_uri,  # GCS bucket for user-scoped artifacts
     allow_origins=allow_origins,
     web=True,

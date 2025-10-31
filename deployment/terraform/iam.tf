@@ -170,3 +170,29 @@ resource "google_secret_manager_secret_iam_member" "fal_api_key_cicd_access" {
     google_service_account.cicd_runner_sa
   ]
 }
+
+# Grant Cloud SQL Client role to app service accounts for database access
+resource "google_project_iam_member" "app_sa_cloudsql_client" {
+  for_each = local.deploy_project_ids
+  
+  project = each.value
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.app_sa[each.key].email}"
+  
+  depends_on = [google_service_account.app_sa]
+}
+
+# Grant Secret Accessor for database connection strings
+resource "google_secret_manager_secret_iam_member" "adk_db_connection_accessor" {
+  for_each = local.deploy_project_ids
+  
+  project   = each.value
+  secret_id = google_secret_manager_secret.adk_db_connection[each.key].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.app_sa[each.key].email}"
+  
+  depends_on = [
+    google_secret_manager_secret.adk_db_connection,
+    google_service_account.app_sa
+  ]
+}

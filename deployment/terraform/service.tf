@@ -71,7 +71,20 @@ resource "google_cloud_run_v2_service" "app_staging" {
           }
         }
       }
+
+      env {
+        name = "DB_CONNECTION_STRING"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.adk_db_connection["staging"].secret_id
+            version = "latest"
+          }
+        }
+      }
     }
+
+    # Cloud SQL connection for staging
+    cloud_sql_instances = [google_sql_database_instance.adk_sessions["staging"].connection_name]
 
     service_account                = google_service_account.app_sa["staging"].email
     max_instance_request_concurrency = 40
@@ -153,7 +166,20 @@ resource "google_cloud_run_v2_service" "app_prod" {
           }
         }
       }
+
+      env {
+        name = "DB_CONNECTION_STRING"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.adk_db_connection["production"].secret_id
+            version = "latest"
+          }
+        }
+      }
     }
+
+    # Cloud SQL connection for production
+    cloud_sql_instances = [google_sql_database_instance.adk_sessions["production"].connection_name]
 
     service_account                = google_service_account.app_sa["prod"].email
     max_instance_request_concurrency = 40

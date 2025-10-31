@@ -1,17 +1,42 @@
-# VertexAI Session Service Implementation
+# ADK Session Management Implementation
 
 ## Overview
 
-This document describes the implementation of persistent session storage using VertexAI Session Service for the ADK-based WhatsApp agent. The implementation replaces the previous SQLite-based session storage with a GCS-backed solution that provides:
+This document describes the session management approach for the ADK-based WhatsApp agent. After discovering that ADK's `get_fast_api_app()` does NOT support GCS URIs directly for session storage, we've implemented a hybrid approach that provides:
 
-- **Persistent sessions** across container restarts and deployments
-- **Scalable storage** for multiple concurrent users
-- **Automatic session management** via GCS lifecycle rules
-- **Cloud Run compatibility** for serverless deployments
+- **Session continuity** during container lifetime via SQLite
+- **User context persistence** via WhatsApp bot session retrieval
+- **User-scoped state** via ADK's built-in state management
+- **Scalable artifact storage** via GCS
+- **Future-ready infrastructure** with GCS buckets reserved for custom implementation
 
-## Architecture
+## Why Not GCS URIs?
 
-### Session Storage Flow
+### ADK's Session Service Requirements
+
+After thorough investigation of ADK documentation and testing, we discovered:
+
+1. **`get_fast_api_app()` only accepts database connection strings** for `session_service_uri`
+   - Valid formats: `sqlite:///path`, `postgresql://...`, `mysql://...`
+   - **NOT supported**: `gs://bucket-name` URIs
+
+2. **VertexAiSessionService is a separate class** that must be initialized programmatically
+   - Requires `project` and `location` parameters
+   - Cannot be passed as a URI string to `get_fast_api_app()`
+   - Would require custom Runner implementation instead of using the convenience function
+
+3. **The deployment error we encountered was:**
+   ```
+   ValueError: Invalid database URL format or argument 'gs://staging-adk-my-agentic-rag-adk-sessions'
+   NoSuchModuleError: Can't load plugin: sqlalchemy.dialects:gs
+   ```
+   This confirmed that ADK treats `session_service_uri` as a SQLAlchemy database URL.
+
+## Current Architecture
+
+## Current Architecture
+
+### Session Management Flow
 
 ```
 WhatsApp User Message
@@ -20,33 +45,39 @@ index.js (WhatsApp Bot)
       ↓
 Check for existing ADK session (getExistingADKSession)
       ↓
-If exists: Use existing session
+If exists: Reuse existing session
 If not: Create new session (createADKSession)
       ↓
 Send message to ADK endpoint with sessionId
       ↓
 server.py (FastAPI ADK Server)
       ↓
-VertexAI Session Service (GCS-backed)
+SQLite Session Service (ephemeral during container lifetime)
       ↓
-GCS Bucket: {project}-my-agentic-rag-adk-sessions
+Session data stored in ./sessions.db
       ↓
-Session data stored/retrieved from GCS
+User-scoped state (user: prefix) persists via ADK
 ```
 
 ### Storage Structure
 
-#### Session Storage Bucket
-- **Bucket naming**: `{project_id}-my-agentic-rag-adk-sessions`
-- **Location**: `us-central1`
-- **Path structure**: `{app_name}/{user_id}/session.json`
-- **Versioning**: Enabled
-- **Lifecycle**: Auto-delete after 90 days (prod), 30 days (dev)
+#### Session Storage (SQLite)
+- **Storage**: `./sessions.db` file in container
+- **Lifetime**: Persists during container runtime
+- **Format**: SQLAlchemy-managed database
+- **Cleanup**: Lost on container restart/redeployment
 
-#### Artifact Storage Bucket
+#### Artifact Storage (GCS)
 - **Bucket naming**: `adk_artifact`
 - **Path structure**: `app/{user_id}/{filename}/{version}`
 - **Purpose**: Store media files and generated content
+- **Persistence**: Permanent across all restarts
+
+#### Reserved GCS Session Bucket
+- **Bucket naming**: `{project_id}-my-agentic-rag-adk-sessions`
+- **Status**: Created but not used by ADK directly
+- **Purpose**: Reserved for future custom VertexAiSessionService implementation
+- **Location**: `us-central1`
 
 ## Implementation Details
 

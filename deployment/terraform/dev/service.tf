@@ -58,7 +58,20 @@ resource "google_cloud_run_v2_service" "app" {
           }
         }
       }
+
+      env {
+        name = "DB_CONNECTION_STRING"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.adk_db_connection.secret_id
+            version = "latest"
+          }
+        }
+      }
     }
+
+    # Cloud SQL connection
+    cloud_sql_instances = [google_sql_database_instance.adk_sessions.connection_name]
 
     service_account = google_service_account.app_sa.email
     max_instance_request_concurrency = 40
