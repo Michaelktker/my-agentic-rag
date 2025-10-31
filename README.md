@@ -2,6 +2,11 @@
 
 A comprehensive Retrieval-Augmented Generation (RAG) system with WhatsApp integration, built using Google's Agent Development Kit (ADK). This production-ready application combines intelligent document search, GitHub repository integration, WhatsApp multimodal communication, and advanced artifact management.
 
+**📘 Documentation**:
+- **[Deployment Guide](deployment/README.md)**: Complete infrastructure & Cloud SQL setup
+- **[Mention Flow](MENTION_FLOW.md)**: @Myker activation pattern
+- **[API Reference](app/)**: ADK agent implementation
+
 ## 🚀 Quick Start
 
 ### WhatsApp Bot (Recommended)
@@ -102,9 +107,10 @@ A production-ready system that combines:
 - **Media Processing**: Automatic download, format conversion, and base64 encoding
 - **Artifact Integration**: Server-side persistence via ADK tool_context
 - **Error Handling**: Graceful fallbacks and user-friendly error messages
-- **Session Management**: GCS-based auth state with automatic cleanup
+- **Session Management**: Cloud SQL PostgreSQL for persistent ADK sessions
 
 #### **🔧 Technical Architecture**
+- **Session Persistence**: Cloud SQL PostgreSQL for ADK sessions (survives restarts & scale-to-zero)
 - **Simplified GCS Operations**: Removed ~580 lines of redundant client-side code
 - **ADK-Native Patterns**: Uses tool_context.save_artifact() for all persistence
 - **MCP Integration**: Model Context Protocol server for external AI services
@@ -116,21 +122,34 @@ A production-ready system that combines:
 ### System Overview
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                WhatsApp ADK Bot System (Simplified)                │
+│            WhatsApp ADK Bot with Cloud SQL Persistence             │
 ├─────────────────────────────────────────────────────────────────────┤
-│  WhatsApp ↔ Baileys ↔ Node.js Bot → Google ADK Service             │
+│  WhatsApp ↔ Baileys ↔ Node.js Bot → Cloud Run ADK Service          │
 │                         │                    ↕                     │
 │                         │         ADK Agent (tool_context)         │
-│                         │              ↕         ↕                 │
-│                   Auth State    GCS Artifacts  AI Tools            │
-│                                      ↕            ↕                 │
-│                              Smart Renaming  GitHub MCP             │
-│                                      ↕            ↕                 │
-│                              Polling Agent ← fal.ai MCP             │
-│                                      ↕            ↕                 │
-│                               100+ AI Models  Vertex Search         │
+│                         │         ↕          ↕         ↕           │
+│                   Auth State  PostgreSQL  GCS       AI Tools       │
+│                   (GCS)       Sessions  Artifacts                   │
+│                                  ↕          ↕         ↕             │
+│                              Persistent  Smart   GitHub MCP         │
+│                              Across      Naming                     │
+│                              Restarts      ↕         ↕             │
+│                                      Polling ← fal.ai MCP           │
+│                                      Agent     ↕                    │
+│                                         100+ AI Models              │
+│                                              ↕                     │
+│                                       Vertex Search                 │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+**Key Infrastructure**:
+- **Cloud Run**: Serverless ADK agent (auto-scales 1-10 instances)
+- **Cloud SQL PostgreSQL**: Session persistence (survives container restarts)
+- **GCS Buckets**: Artifact storage, auth state, logs
+- **Secret Manager**: API keys, database credentials
+- **MCP Servers**: GitHub integration, fal.ai models
+
+See **[deployment/README.md](deployment/README.md)** for complete setup.
 
 ### Key Architectural Decisions
 

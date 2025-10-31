@@ -1,4 +1,50 @@
 #!/bin/bash
+# ============================================================================
+# WhatsApp Bot Deployment Script
+# ============================================================================
+#
+# PURPOSE:
+#   Deploy code updates to a RUNNING WhatsApp bot VM. Does NOT create new VM.
+#   Copies application files, installs dependencies, and restarts service.
+#
+# USAGE:
+#   # From local machine (workspace root):
+#   ./deployment/deploy-to-vm.sh
+#
+# PREREQUISITES:
+#   - VM already exists and is running (use vm-setup.sh for initial setup)
+#   - gcloud CLI authenticated
+#   - Appropriate GCP permissions
+#
+# CONFIGURATION:
+#   PROJECT: staging-adk
+#   ZONE: us-central1-a
+#   VM_NAME: whatsapp-bot
+#
+# WHAT IT DOES:
+#   1. Copies files to VM: index.js, package.json, package-lock.json, config.json
+#   2. SSHs into VM and:
+#      - Upgrades to Node.js 20 (if needed)
+#      - Installs npm dependencies
+#      - Creates/updates systemd service
+#      - Reloads systemd daemon
+#      - Restarts whatsapp-bot service
+#   3. Shows service status
+#
+# AFTER RUNNING:
+#   - Bot restarted with latest code
+#   - Check logs: gcloud compute ssh whatsapp-bot --project=staging-adk \
+#                 --zone=us-central1-a --command='sudo journalctl -u whatsapp-bot -f'
+#
+# TROUBLESHOOTING:
+#   - If QR code scanning fails: sudo systemctl restart whatsapp-bot
+#   - View full logs: sudo journalctl -u whatsapp-bot -n 100
+#   - Check service status: sudo systemctl status whatsapp-bot
+#
+# RELATED SCRIPTS:
+#   - vm-setup.sh: Initial VM setup (first-time only)
+#
+# ============================================================================
 set -e
 
 echo "==================================="

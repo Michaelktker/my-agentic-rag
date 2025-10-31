@@ -1,4 +1,44 @@
 #!/bin/bash
+# ============================================================================
+# WhatsApp Bot VM Initial Setup
+# ============================================================================
+# 
+# PURPOSE:
+#   First-time setup of a new Compute Engine VM for WhatsApp bot deployment.
+#   Installs Node.js 20, clones repository, installs dependencies, and 
+#   creates systemd service for auto-restart.
+#
+# USAGE:
+#   # SSH into VM and run:
+#   bash <(curl -s https://raw.githubusercontent.com/Michaelktker/my-agentic-rag/main/deployment/vm-setup.sh)
+#
+#   # Or copy and run locally on VM:
+#   ./vm-setup.sh
+#
+# PREREQUISITES:
+#   - Fresh Compute Engine VM (Debian/Ubuntu)
+#   - Internet access
+#   - sudo privileges
+#
+# WHAT IT DOES:
+#   1. Updates system packages
+#   2. Installs Node.js 20 LTS
+#   3. Clones GitHub repository
+#   4. Installs npm dependencies
+#   5. Creates systemd service (whatsapp-bot.service)
+#   6. Enables auto-start on boot
+#   7. Starts the bot service
+#
+# AFTER RUNNING:
+#   - Bot will be running as systemd service
+#   - QR code available in logs: sudo journalctl -u whatsapp-bot -f
+#   - Auto-restarts on failure
+#   - Auto-starts on VM reboot
+#
+# RELATED SCRIPTS:
+#   - deploy-to-vm.sh: Update running bot with code changes
+#
+# ============================================================================
 set -e
 
 echo "==================================="
