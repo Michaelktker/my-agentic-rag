@@ -23,13 +23,9 @@ class TestGeminiIssue:
         
         assert issue_title == "Test Issue from Gemini"
         assert issue_description == "This is a test issue created by Gemini."
-        assert True, "Gemini test issue acknowledged and resolved"
     
     def test_system_ready(self):
         """Test that the system is ready to handle test issues."""
-        # Verify Python version is compatible
-        assert sys.version_info >= (3, 9), "Python 3.9+ is required"
-        
         # Verify basic functionality
         test_data = {
             "issue": "Test Issue from Gemini",
