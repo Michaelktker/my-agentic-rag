@@ -959,32 +959,8 @@ def serialize_pydantic_to_dict(obj: Any) -> Any:
     return obj
 
 
-class SerializingMCPTool(MCPTool):
-    """Wrapper for MCPTool that serializes Pydantic responses properly."""
-    
-    async def run_async(self, args: dict[str, Any], tool_context: ToolContext | None = None) -> Any:
-        """Run the tool and serialize the response."""
-        result = await super().run_async(args, tool_context)
-        # Serialize any Pydantic models or AnyUrl objects in the result
-        return serialize_pydantic_to_dict(result)
-
-
-class SerializingMCPToolset(MCPToolset):
-    """MCPToolset that wraps tools with serialization."""
-    
-    async def get_tools(self, context=None):
-        """Override get_tools to wrap with serialization."""
-        tools = await super().get_tools(context)
-        return [self._wrap_tool(tool) for tool in tools]
-    
-    def _wrap_tool(self, tool):
-        """Wrap an MCP tool with serialization."""
-        if isinstance(tool, MCPTool):
-            # Create a new SerializingMCPTool with the same configuration
-            serializing_tool = SerializingMCPTool.__new__(SerializingMCPTool)
-            serializing_tool.__dict__.update(tool.__dict__)
-            return serializing_tool
-        return tool
+# Removed SerializingMCPTool and SerializingMCPToolset classes
+# The MCP tools should work without custom serialization wrappers
 
 
 github_token = get_github_token()
@@ -993,7 +969,7 @@ if not github_token:
         "GitHub token is required but not available from environment or Secret Manager"
     )
 
-mcp_tools = SerializingMCPToolset(
+mcp_tools = MCPToolset(
     connection_params=StreamableHTTPConnectionParams(
         url="https://api.githubcopilot.com/mcp/",
         headers={
@@ -1006,7 +982,7 @@ mcp_tools = SerializingMCPToolset(
 # Fixed **kwargs compatibility issue by removing problematic functions from generate.py
 import os
 mcp_fal_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp-fal", "main.py")
-fal_mcp_tools = SerializingMCPToolset(
+fal_mcp_tools = MCPToolset(
     connection_params=StdioConnectionParams(
         server_params=StdioServerParameters(
             command="python",
