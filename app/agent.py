@@ -972,9 +972,9 @@ class SerializingMCPTool(MCPTool):
 class SerializingMCPToolset(MCPToolset):
     """MCPToolset that wraps tools with serialization."""
     
-    def get_tools(self):
+    async def get_tools(self, context=None):
         """Override get_tools to wrap with serialization."""
-        tools = super().get_tools()
+        tools = await super().get_tools(context)
         return [self._wrap_tool(tool) for tool in tools]
     
     def _wrap_tool(self, tool):
