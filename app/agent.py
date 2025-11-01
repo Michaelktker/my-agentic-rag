@@ -30,7 +30,7 @@ import google
 import vertexai
 from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
-from google.adk.tools.mcp_tool import MCPToolset, StreamableHTTPConnectionParams, StdioConnectionParams
+from google.adk.tools.mcp_tool import MCPToolset, StreamableHTTPConnectionParams, StdioConnectionParams, MCPTool
 from mcp.client.stdio import StdioServerParameters
 from google.adk.tools import google_search
 from google.adk.tools.agent_tool import AgentTool
@@ -38,6 +38,8 @@ from google.adk.tools import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 from langchain_google_vertexai import VertexAIEmbeddings
+from pydantic import BaseModel
+from typing import Any
 
 
 def has_myker_mention(text: str) -> bool:
@@ -926,13 +928,73 @@ def get_github_token():
         return None
 
 
+def serialize_pydantic_to_dict(obj: Any) -> Any:
+    """
+    Recursively convert Pydantic models and special types (like AnyUrl) to JSON-serializable dicts.
+    This fixes the TypeError: Object of type AnyUrl is not JSON serializable error.
+    
+    Args:
+        obj: Any object that might contain Pydantic models or AnyUrl objects
+        
+    Returns:
+        JSON-serializable version of the object
+    """
+    # Handle Pydantic models
+    if isinstance(obj, BaseModel):
+        return serialize_pydantic_to_dict(obj.model_dump())
+    
+    # Handle dictionaries
+    elif isinstance(obj, dict):
+        return {k: serialize_pydantic_to_dict(v) for k, v in obj.items()}
+    
+    # Handle lists
+    elif isinstance(obj, list):
+        return [serialize_pydantic_to_dict(item) for item in obj]
+    
+    # Handle AnyUrl and other special Pydantic types - convert to string
+    elif hasattr(obj, '__str__') and type(obj).__module__ == 'pydantic_core._pydantic_core':
+        return str(obj)
+    
+    # Return as-is for primitive types
+    return obj
+
+
+class SerializingMCPTool(MCPTool):
+    """Wrapper for MCPTool that serializes Pydantic responses properly."""
+    
+    async def run_async(self, args: dict[str, Any], tool_context: ToolContext | None = None) -> Any:
+        """Run the tool and serialize the response."""
+        result = await super().run_async(args, tool_context)
+        # Serialize any Pydantic models or AnyUrl objects in the result
+        return serialize_pydantic_to_dict(result)
+
+
+class SerializingMCPToolset(MCPToolset):
+    """MCPToolset that wraps tools with serialization."""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Wrap each tool with serialization
+        self._original_tools = self._tools
+        self._tools = [self._wrap_tool(tool) for tool in self._tools]
+    
+    def _wrap_tool(self, tool):
+        """Wrap an MCP tool with serialization."""
+        if isinstance(tool, MCPTool):
+            # Create a new SerializingMCPTool with the same configuration
+            serializing_tool = SerializingMCPTool.__new__(SerializingMCPTool)
+            serializing_tool.__dict__.update(tool.__dict__)
+            return serializing_tool
+        return tool
+
+
 github_token = get_github_token()
 if not github_token:
     raise RuntimeError(
         "GitHub token is required but not available from environment or Secret Manager"
     )
 
-mcp_tools = MCPToolset(
+mcp_tools = SerializingMCPToolset(
     connection_params=StreamableHTTPConnectionParams(
         url="https://api.githubcopilot.com/mcp/",
         headers={
@@ -945,7 +1007,7 @@ mcp_tools = MCPToolset(
 # Fixed **kwargs compatibility issue by removing problematic functions from generate.py
 import os
 mcp_fal_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp-fal", "main.py")
-fal_mcp_tools = MCPToolset(
+fal_mcp_tools = SerializingMCPToolset(
     connection_params=StdioConnectionParams(
         server_params=StdioServerParameters(
             command="python",
