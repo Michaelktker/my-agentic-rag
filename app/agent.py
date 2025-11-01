@@ -961,6 +961,7 @@ def serialize_pydantic_to_dict(obj: Any) -> Any:
 
 # Removed SerializingMCPTool and SerializingMCPToolset classes
 # The MCP tools should work without custom serialization wrappers
+# Test comment: Cloud Build trigger test - November 1, 2025
 
 
 github_token = get_github_token()
