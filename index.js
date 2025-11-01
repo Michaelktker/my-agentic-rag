@@ -11,6 +11,7 @@ const { v4: uuidv4 } = require('uuid');
 const { fileTypeFromBuffer } = require('file-type');
 const XLSX = require('xlsx');
 const mammoth = require('mammoth');
+const PQueue = require('p-queue').default;
 
 // Load configuration
 let config;
@@ -576,6 +577,71 @@ class WhatsAppBot {
         this.pendingTimers = new Map(); // Track pending @Fal timers
         this.mediaHandler = new MediaHandler();
         this.sessionManager = new UserSessionManager();
+        
+        // Message queue with concurrency control
+        // This prevents overwhelming the ADK service with too many concurrent requests
+        this.messageQueue = new PQueue({
+            concurrency: 5, // Process up to 5 messages concurrently
+            interval: 1000, // Time window for intervalCap
+            intervalCap: 10, // Maximum 10 messages per second (rate limiting)
+            timeout: 60000, // 60 second timeout per message
+            throwOnTimeout: false // Don't throw on timeout, just log
+        });
+        
+        // Track queue metrics
+        this.queueMetrics = {
+            totalProcessed: 0,
+            totalFailed: 0,
+            currentlyProcessing: 0,
+            lastResetTime: Date.now()
+        };
+        
+        // Set up queue event listeners for monitoring
+        this.setupQueueMonitoring();
+    }
+    
+    /**
+     * Set up event listeners for queue monitoring and logging
+     */
+    setupQueueMonitoring() {
+        this.messageQueue.on('active', () => {
+            this.queueMetrics.currentlyProcessing++;
+            logger.debug(`📊 Queue active - Size: ${this.messageQueue.size}, Pending: ${this.messageQueue.pending}, Processing: ${this.queueMetrics.currentlyProcessing}`);
+        });
+        
+        this.messageQueue.on('next', () => {
+            this.queueMetrics.currentlyProcessing--;
+            this.queueMetrics.totalProcessed++;
+        });
+        
+        this.messageQueue.on('idle', () => {
+            logger.info(`✅ Queue is idle - Total processed: ${this.queueMetrics.totalProcessed}, Failed: ${this.queueMetrics.totalFailed}`);
+        });
+        
+        this.messageQueue.on('error', (error) => {
+            this.queueMetrics.totalFailed++;
+            logger.error(`❌ Queue task error:`, error);
+        });
+        
+        // Log queue stats every 30 seconds
+        setInterval(() => {
+            if (this.messageQueue.size > 0 || this.messageQueue.pending > 0) {
+                const timeSinceReset = (Date.now() - this.queueMetrics.lastResetTime) / 1000;
+                const throughput = (this.queueMetrics.totalProcessed / timeSinceReset).toFixed(2);
+                logger.info(`📈 Queue Stats - Size: ${this.messageQueue.size}, Pending: ${this.messageQueue.pending}, Processing: ${this.queueMetrics.currentlyProcessing}, Throughput: ${throughput} msg/s`);
+            }
+        }, 30000);
+        
+        // Reset metrics every hour
+        setInterval(() => {
+            logger.info(`🔄 Resetting queue metrics - Processed: ${this.queueMetrics.totalProcessed}, Failed: ${this.queueMetrics.totalFailed}`);
+            this.queueMetrics = {
+                totalProcessed: 0,
+                totalFailed: 0,
+                currentlyProcessing: this.queueMetrics.currentlyProcessing,
+                lastResetTime: Date.now()
+            };
+        }, 3600000); // 1 hour
     }
 
     async initialize() {
@@ -668,8 +734,54 @@ class WhatsAppBot {
     }
 
     async handleIncomingMessages(m) {
+        const message = m.messages[0];
+        
+        // Quick validation before queuing
+        if (!message || !message.message) {
+            logger.debug('Message has no content, skipping queue');
+            return;
+        }
+        
+        const remoteJid = message.key.remoteJid;
+        if (!remoteJid) {
+            logger.debug('Message has no remoteJid, skipping queue');
+            return;
+        }
+        
+        // Add message to queue for processing
+        // Each message is processed independently with concurrency control
+        const queuePosition = this.messageQueue.size + this.messageQueue.pending + 1;
+        logger.info(`📬 Message queued from ${remoteJid} (position ${queuePosition} in queue)`);
+        
+        // Add to queue with priority (group messages get slightly lower priority)
+        const isGroupMessage = remoteJid.endsWith('@g.us');
+        const priority = isGroupMessage ? 0 : 1; // Individual chats have higher priority
+        
+        this.messageQueue.add(
+            async () => {
+                try {
+                    await this.processMessage(message);
+                } catch (error) {
+                    logger.error(`❌ Error processing queued message from ${remoteJid}:`, error);
+                    // Send error message to user
+                    try {
+                        await this.sendMessage(remoteJid, '❌ Sorry, I encountered an error processing your message. Please try again.');
+                    } catch (sendError) {
+                        logger.error('Failed to send error message to user:', sendError);
+                    }
+                }
+            },
+            { priority }
+        ).catch(error => {
+            logger.error(`❌ Queue task failed for ${remoteJid}:`, error);
+        });
+    }
+    
+    /**
+     * Process a single message (extracted from handleIncomingMessages for queue processing)
+     */
+    async processMessage(message) {
         try {
-            const message = m.messages[0];
             
             // Enhanced debugging for PDF uploads
             logger.info(`Raw message received - message exists: ${!!message}`);
@@ -837,27 +949,15 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
             }
 
         } catch (error) {
-            logger.error('Error handling incoming message:', error);
-            logger.error('Error message:', error.message || 'No error message');
-            logger.error('Error name:', error.name || 'No error name');
-            logger.error('Error stack:', error.stack || 'No stack trace');
+            logger.error('Error processing message:', error);
             logger.error('Error details:', {
                 message: error.message,
                 name: error.name,
-                stack: error.stack,
-                toString: error.toString(),
-                errorType: typeof error
+                stack: error.stack
             });
             
-            // Send error message to user
-            try {
-                const remoteJid = message?.key?.remoteJid;
-                if (remoteJid) {
-                    await this.sendMessage(remoteJid, '❌ Sorry, I encountered an error processing your message. Please try again.');
-                }
-            } catch (sendError) {
-                logger.error('Failed to send error message to user:', sendError);
-            }
+            // Re-throw to let queue handler send error message
+            throw error;
         }
     }
 
@@ -1184,36 +1284,83 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
 
             logger.info(`ADK Response Status: ${response.status}`);
             
-            // Handle 500 errors - might be invalid session, try creating a new one
-            if (response.status === 500) {
-                logger.warn(`ADK Service Error (500), trying with new session...`);
+            // Handle different HTTP status codes
+            switch (response.status) {
+                case 200:
+                    // Success - process response
+                    return await this.handleNonStreamingResponse(response.data, jid, sessionId);
                 
-                // Try creating a new session and retry
-                const newSessionId = await this.createADKSession(userId);
-                if (newSessionId) {
-                    payload.sessionId = newSessionId;
+                case 429:
+                    // Rate limited - add exponential backoff retry
+                    logger.warn(`⏱️ Rate limited (429) for user ${userId}, retrying with backoff...`);
+                    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
                     
-                    // Update the session in memory
-                    if (this.activeSessions && this.activeSessions.has(userId)) {
-                        this.activeSessions.get(userId).sessionId = newSessionId;
+                    // Retry once after backoff
+                    try {
+                        const retryResponse = await axios.post(`${adkUrl}/run`, payload, {
+                            headers: { 'Content-Type': 'application/json' },
+                            timeout: config.adk.timeout,
+                            validateStatus: function (status) { return status >= 200 && status < 600; }
+                        });
+                        
+                        if (retryResponse.status === 200) {
+                            logger.info(`✅ Retry successful after rate limit for user ${userId}`);
+                            return await this.handleNonStreamingResponse(retryResponse.data, jid, sessionId);
+                        }
+                    } catch (retryError) {
+                        logger.error(`❌ Retry failed after rate limit: ${retryError.message}`);
                     }
                     
-                    // Retry request
-                    return await this.sendToADK(message, newSessionId, userId, jid, mediaParts, userName);
-                }
+                    return 'The AI service is currently busy handling multiple requests. Please wait a moment and try again.';
                 
-                logger.error(`ADK Service Error: Unable to create new session`);
-                return 'I apologize, but the AI service is currently experiencing issues. The development team has been notified. Please try again later.';
+                case 500:
+                    // Server error - might be invalid session, try creating a new one
+                    logger.warn(`⚠️ Server error (500) for user ${userId}, trying with new session...`);
+                    
+                    // Try creating a new session and retry
+                    const newSessionId = await this.createADKSession(userId);
+                    if (newSessionId) {
+                        payload.sessionId = newSessionId;
+                        
+                        // Update the session in memory
+                        if (this.activeSessions && this.activeSessions.has(userId)) {
+                            this.activeSessions.get(userId).sessionId = newSessionId;
+                        }
+                        
+                        // Retry request
+                        return await this.sendToADK(message, newSessionId, userId, jid, mediaParts, userName);
+                    }
+                    
+                    logger.error(`❌ ADK Service Error: Unable to create new session`);
+                    return 'I apologize, but the AI service is currently experiencing issues. The development team has been notified. Please try again later.';
+                
+                case 503:
+                    // Service unavailable - temporary overload
+                    logger.warn(`⚠️ Service unavailable (503) for user ${userId} - service may be overloaded`);
+                    return 'The AI service is temporarily overloaded with requests. Please wait a minute and try again.';
+                
+                case 504:
+                    // Gateway timeout
+                    logger.warn(`⏱️ Gateway timeout (504) for user ${userId}`);
+                    return 'Your request took too long to process. Please try with a shorter message or try again.';
+                
+                case 400:
+                    // Bad request
+                    logger.error(`❌ Bad request (400) for user ${userId}: ${JSON.stringify(response.data)}`);
+                    return 'There was an issue with your request format. Please try rephrasing your message.';
+                
+                case 401:
+                case 403:
+                    // Authentication/authorization errors
+                    logger.error(`🔒 Authentication error (${response.status}) for user ${userId}`);
+                    return 'There was an authentication issue with the AI service. The development team has been notified.';
+                
+                default:
+                    // Unknown status code - log full details
+                    logger.error(`❓ Unexpected ADK status ${response.status} for user ${userId}`);
+                    logger.error(`Response data: ${JSON.stringify(response.data)}`);
+                    return `I received your message, but the AI service returned status ${response.status}. Please try again in a moment.`;
             }
-            
-            // Process successful response
-            if (response.status === 200) {
-                return await this.handleNonStreamingResponse(response.data, jid, sessionId);
-            }
-
-            // Fallback - return informative error message
-            logger.info(`ADK Error Status: ${response.status}`);
-            return 'I received your message, but the AI service returned an unexpected response. Please try again.';
 
         } catch (error) {
             logger.error('❌ ADK request failed:', error.message);
