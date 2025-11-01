@@ -68,6 +68,11 @@ resource "google_cloud_run_v2_service" "app" {
           }
         }
       }
+
+      volume_mounts {
+        name       = "cloudsql"
+        mount_path = "/cloudsql"
+      }
     }
 
     service_account = google_service_account.app_sa.email
