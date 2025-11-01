@@ -32,9 +32,12 @@ resource "google_sql_database_instance" "adk_sessions" {
     }
 
     ip_configuration {
-      ipv4_enabled    = false
+      ipv4_enabled    = true
       private_network = null
-      require_ssl     = false
+      authorized_networks {
+        name  = "allow-all"
+        value = "0.0.0.0/0"
+      }
     }
 
     database_flags {

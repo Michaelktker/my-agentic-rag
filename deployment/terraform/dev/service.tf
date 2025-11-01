@@ -70,10 +70,15 @@ resource "google_cloud_run_v2_service" "app" {
       }
     }
 
-    # Cloud SQL connection
-    cloud_sql_instances = [google_sql_database_instance.adk_sessions.connection_name]
-
     service_account = google_service_account.app_sa.email
+    
+    # Cloud SQL connection
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [google_sql_database_instance.adk_sessions.connection_name]
+      }
+    }
     max_instance_request_concurrency = 40
 
     scaling {

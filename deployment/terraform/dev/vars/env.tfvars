@@ -2,7 +2,7 @@
 project_name = "my-agentic-rag"
 
 # Your Dev Google Cloud project id
-dev_project_id = "production-adk"
+dev_project_id = "staging-adk"
 
 # The Google Cloud region you will use to deploy the infrastructure
 region = "us-central1"
