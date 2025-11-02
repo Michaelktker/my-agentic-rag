@@ -959,22 +959,22 @@ def serialize_pydantic_to_dict(obj: Any) -> Any:
     return obj
 
 
-# Removed SerializingMCPTool and SerializingMCPToolset classes
-# The MCP tools should work without custom serialization wrappers
-# Test comment: Cloud Build trigger test - November 1, 2025
-
-
 github_token = get_github_token()
 if not github_token:
     raise RuntimeError(
         "GitHub token is required but not available from environment or Secret Manager"
     )
 
+# Create GitHub MCP toolset
+# Note: We handle Pydantic AnyUrl serialization in the connection_params
+# by ensuring all responses are properly serialized to JSON-compatible types
 mcp_tools = MCPToolset(
     connection_params=StreamableHTTPConnectionParams(
         url="https://api.githubcopilot.com/mcp/",
         headers={
             "Authorization": f"Bearer {github_token}",
+            # Add header to request JSON serializable responses
+            "Accept": "application/json",
         },
     ),
 )
@@ -993,12 +993,31 @@ fal_mcp_tools = MCPToolset(
     )
 )
 
-# Create the GitHub MCP subagent
+
+# Callback to serialize Pydantic models from GitHub MCP responses
+async def github_mcp_after_callback(callback_context: CallbackContext) -> None:
+    """
+    Serialize Pydantic models (including AnyUrl) from GitHub MCP tool responses
+    to prevent JSON serialization errors.
+    """
+    try:
+        # Check if we have a tool result that needs serialization
+        if hasattr(callback_context, 'tool_result') and callback_context.tool_result is not None:
+            # Serialize the result to handle Pydantic types like AnyUrl
+            callback_context.tool_result = serialize_pydantic_to_dict(callback_context.tool_result)
+            logger.info("[GITHUB MCP] Serialized tool result to JSON-compatible format")
+    except Exception as e:
+        logger.error(f"[GITHUB MCP] Error serializing tool result: {e}")
+        # Don't fail the callback, just log the error
+
+
+# Create the GitHub MCP subagent with serialization callback
 github_mcp_agent = Agent(
     model="gemini-2.5-flash",
     name="github_mcp_agent",
     instruction=GITHUB_MCP_PROMPT,
     tools=[mcp_tools],
+    after_agent_callback=github_mcp_after_callback,
 )
 
 # Create the fal.ai MCP subagent for comprehensive AI content generation
