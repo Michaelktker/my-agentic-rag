@@ -1195,3 +1195,17 @@ root_agent = Agent(
 # CI/CD Pipeline Test: Sun Oct  5 16:29:20 UTC 2025 - Testing automated deployment with latest Secret Manager integration
 # Force deployment trigger - Sat Oct 18 16:41:33 UTC 2025
 # URGENT: Fix deployment - wildcard artifact search not working - Sat Oct 18 17:19:00 UTC 2025
+
+# Startup debug: list available tools on the root agent so we can verify visibility to the model
+try:
+    logger.info("[AGENT STARTUP] Root agent initialized. Listing available tools for debugging:")
+    for idx, t in enumerate(tools or []):
+        try:
+            # Attempt to extract common attributes safely
+            tool_name = getattr(t, "name", None) or getattr(t, "__class__", type(t)).__name__
+            tool_repr = repr(t)
+            logger.info(f"[AGENT STARTUP] Tool {idx}: name={tool_name} repr={tool_repr}")
+        except Exception as _e:
+            logger.info(f"[AGENT STARTUP] Tool {idx}: could not repr tool: {_e}")
+except Exception as e:
+    logger.error(f"[AGENT STARTUP] Error while listing tools: {e}")
