@@ -378,25 +378,36 @@ When searching:
 Always be transparent about the sources of your information and the recency of the data."""
 
 # GitHub MCP agent prompt
-GITHUB_MCP_PROMPT = f"""You are a specialized GitHub agent with access to GitHub repository operations through MCP (Model Context Protocol) tools.
+GITHUB_MCP_PROMPT = f"""You are a specialized GitHub operations agent with FULL ACCESS to GitHub through MCP (Model Context Protocol) tools.
 
-Your role is to:
-1. Handle all GitHub repository operations efficiently
-2. Search and navigate repositories and files
-3. Access and analyze issues and pull requests
-4. Retrieve repository information and metadata
-5. Perform code analysis and understanding
+## WHEN TO USE THIS AGENT:
+Use this agent for ANY GitHub-related task including:
+- Creating, updating, listing, or closing issues
+- Creating, updating, reviewing pull requests  
+- Managing repositories (create, fork, search)
+- Working with branches, commits, and files
+- Searching code, issues, or repositories
+- Getting repository information and metadata
+- Managing labels, milestones, and projects
+- Any other GitHub API operation
 
-By default, you are working with the GitHub repository: Michaelktker/my-agentic-rag
-When using GitHub tools, use this repository unless the user specifically requests a different one.
+## DEFAULT REPOSITORY:
+By default, work with: {GITHUB_OWNER}/{GITHUB_REPO}
+Use this repository unless the user specifically requests a different one.
 
-When performing GitHub operations:
-- Use the most appropriate MCP tool for the requested operation
-- Provide clear and structured information from GitHub
-- Handle errors gracefully and provide helpful feedback
-- Be efficient in your tool usage
+## IMPORTANT INSTRUCTIONS:
+1. **Take Action Immediately** - Don't just acknowledge, actually call the GitHub MCP tools
+2. **Use Available MCP Tools** - You have full GitHub API access through MCP tools
+3. **Be Specific** - Provide complete information from GitHub responses
+4. **Handle Errors** - If a tool fails, explain why and suggest alternatives
+5. **Return Results** - Always return the actual results from GitHub operations
 
-Always be precise and thorough in your GitHub operations."""
+## WORKFLOW:
+1. Understand what GitHub operation is needed
+2. Call the appropriate MCP tool(s) with correct parameters
+3. Return the results clearly to the user
+
+Always execute GitHub operations - never just say you'll do it!"""
 
 # fal.ai MCP agent prompt
 FAL_MCP_PROMPT = """
@@ -492,9 +503,16 @@ Answer to the best of your ability using the context provided and leverage the t
 
 You have access to several specialized capabilities:
 1. **Document retrieval** from your knowledge base using retrieve_docs
-2. **GitHub operations** through a specialized GitHub agent with MCP tools  
+2. **GitHub operations** through github_mcp_agent - USE THIS for ALL GitHub tasks:
+   - Creating/updating/closing issues
+   - Managing pull requests
+   - Repository operations (create, fork, search)
+   - Branch and commit management
+   - Code/issue/repository search
+   - ANY GitHub API operation
+   IMPORTANT: When user asks about GitHub, IMMEDIATELY delegate to github_mcp_agent
 3. **Web search** capabilities through a specialized web search agent
-3. **fal.ai AI generation** through a specialized fal.ai agent with access to:
+4. **fal.ai AI generation** through a specialized fal.ai agent with access to:
    - Advanced image generation models (Flux, SDXL, etc.)
    - Video generation capabilities (Stable Video Diffusion, etc.)
    - Audio & music generation models (text-to-audio, text-to-music, music synthesis)
@@ -1060,19 +1078,9 @@ fal_mcp_agent = Agent(
     tools=[fal_mcp_tools],
 )
 
-# Create AgentTool from the GitHub MCP subagent with clear description
-github_mcp_tool = AgentTool(
-    agent=github_mcp_agent,
-    name="github_operations",
-    description="""Use this tool for ALL GitHub operations including:
-- Creating, updating, or managing GitHub issues
-- Creating, updating, or managing pull requests  
-- Managing GitHub repositories (create, fork, etc.)
-- Working with GitHub branches and commits
-- Searching GitHub code, issues, or repositories
-- Any task that requires interacting with GitHub
-This tool has full access to the Michaelktker/my-agentic-rag repository and can perform read and write operations."""
-)
+# Create AgentTool from the GitHub MCP subagent
+# Note: AgentTool doesn't support name/description params - these come from the agent itself
+github_mcp_tool = AgentTool(agent=github_mcp_agent)
 
 # Create AgentTool from the fal.ai MCP subagent
 fal_mcp_tool = AgentTool(agent=fal_mcp_agent)
