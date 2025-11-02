@@ -503,14 +503,14 @@ Answer to the best of your ability using the context provided and leverage the t
 
 You have access to several specialized capabilities:
 1. **Document retrieval** from your knowledge base using retrieve_docs
-2. **GitHub operations** through github_mcp_agent - USE THIS for ALL GitHub tasks:
+2. **GitHub operations** through github_mcp_tool - USE THIS for ALL GitHub tasks:
    - Creating/updating/closing issues
    - Managing pull requests
    - Repository operations (create, fork, search)
    - Branch and commit management
    - Code/issue/repository search
    - ANY GitHub API operation
-   IMPORTANT: When user asks about GitHub, IMMEDIATELY delegate to github_mcp_agent
+   IMPORTANT: When user asks about GitHub, IMMEDIATELY use the github_mcp_tool
 3. **Web search** capabilities through a specialized web search agent
 4. **fal.ai AI generation** through a specialized fal.ai agent with access to:
    - Advanced image generation models (Flux, SDXL, etc.)
