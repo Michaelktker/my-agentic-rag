@@ -65,28 +65,13 @@ artifacts_bucket_uri = f"gs://{artifacts_bucket_name}"
 # - Sessions persist across container restarts and deployments
 # - Scalable and production-ready
 #
-# Connection Pool Configuration (added to prevent startup failures):
-# - pool_size=3: Reduced from default 5 to minimize initial connection load
-# - max_overflow=7: Allow up to 10 total connections (3+7) under load
-# - pool_pre_ping=True: Check connection health before use, prevent stale connections
-# - pool_recycle=3600: Recycle connections after 1 hour to avoid timeouts
+# Note: Connection pool parameters (pool_size, pool_pre_ping, etc.) cannot be passed
+# via the connection string as they are create_engine() parameters, not DSN parameters.
+# ADK's DatabaseSessionService uses default SQLAlchemy pooling settings.
+# The db-g1-small tier upgrade (1.7GB RAM) provides sufficient resources for default pooling.
 #
 # Development fallback: SQLite if DB_CONNECTION_STRING not set
-db_connection_string = os.getenv("DB_CONNECTION_STRING", "sqlite:///./sessions.db")
-
-# Add connection pool parameters for PostgreSQL to prevent startup failures
-if "postgresql://" in db_connection_string:
-    # Append pool configuration parameters to connection string
-    separator = "&" if "?" in db_connection_string else "?"
-    session_service_uri = (
-        f"{db_connection_string}{separator}"
-        f"pool_size=3&"  # Smaller initial pool for db-g1-small
-        f"max_overflow=7&"  # Allow growth to 10 connections
-        f"pool_pre_ping=True&"  # Health check connections before use
-        f"pool_recycle=3600"  # Recycle every hour
-    )
-else:
-    session_service_uri = db_connection_string
+session_service_uri = os.getenv("DB_CONNECTION_STRING", "sqlite:///./sessions.db")
 
 # GCS buckets for artifact storage
 session_bucket_name = f"{project_id}-my-agentic-rag-adk-sessions"
@@ -99,11 +84,11 @@ create_bucket_if_not_exists(
 logger.log_struct({
     "message": "ADK Session Service Configuration",
     "session_service_type": "Cloud SQL PostgreSQL" if "postgresql://" in session_service_uri else "SQLite (ephemeral)",
-    "session_service_uri_masked": session_service_uri.split("@")[0] + "@***" if "@" in session_service_uri else session_service_uri.split("?")[0],
+    "session_service_uri_masked": session_service_uri.split("@")[0] + "@***" if "@" in session_service_uri else session_service_uri,
     "artifacts_bucket_uri": artifacts_bucket_uri,
     "gcs_session_bucket": session_bucket_name,
     "persistence": "Fully persistent" if "postgresql://" in session_service_uri else "Ephemeral",
-    "connection_pool_enabled": "postgresql://" in session_service_uri,
+    "database_tier": "db-g1-small (1.7GB RAM)" if "postgresql://" in session_service_uri else "N/A",
     "project_id": project_id
 }, severity="INFO")
 
