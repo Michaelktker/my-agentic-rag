@@ -957,13 +957,28 @@ class WhatsAppBot {
                     // Store the actual filename from media processing
                     uploadedFilename = mediaResult.filename;
                     
-                    // Create Part object for ADK (use base64 data)
-                    mediaParts.push({
-                        inline_data: {
-                            mime_type: mediaResult.mimeType,
-                            data: mediaResult.part.inline_data.data
-                        }
-                    });
+                    // Create Part object for ADK
+                    // For large files: use file_data with GCS URL
+                    // For small files: use inline_data with base64
+                    if (mediaResult.isLargeFile) {
+                        // Large file uploaded to GCS - send URL reference
+                        mediaParts.push({
+                            file_data: {
+                                mime_type: mediaResult.mimeType,
+                                file_uri: mediaResult.fileUri
+                            }
+                        });
+                        logger.info(`📤 Sending large file to ADK via GCS URL: ${mediaResult.fileUri} (${mediaResult.fileSizeMB}MB)`);
+                    } else {
+                        // Small file - send inline base64 data
+                        mediaParts.push({
+                            inline_data: {
+                                mime_type: mediaResult.mimeType,
+                                data: mediaResult.part.inline_data.data
+                            }
+                        });
+                        logger.info(`📤 Sending small file to ADK via inline base64: ${mediaResult.filename} (${mediaResult.fileSizeMB}MB)`);
+                    }
                     
                     // Note: Upload confirmation messages removed per user request
                     // Files are processed silently and sent directly to ADK
