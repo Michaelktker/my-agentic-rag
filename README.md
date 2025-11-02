@@ -417,6 +417,7 @@ Critical infrastructure improvements to resolve database connection failures:
 ### WhatsApp Bot Features
 - **QR Code Authentication**: Easy WhatsApp Web setup and pairing
 - **Media Processing**: Images, audio, video, documents with ADK integration
+- **Smart Trigger Detection**: Intelligent @myker mention handling for image uploads (see below)
 - **Image Generation**: Create images using Vertex AI Imagen 3.0 with direct WhatsApp delivery
 - **Office Document Support**: Automatic XLSX/DOCX to text conversion for Gemini compatibility
 - **Session Management**: Each user gets a unique ADK session with persistent storage
@@ -426,6 +427,42 @@ Critical infrastructure improvements to resolve database connection failures:
 - **Processing Indicators**: User feedback during media processing and image generation
 - **Error Recovery**: Automatic session recreation on service errors with enhanced debugging
 - **Multimodal Conversations**: Seamless text, image analysis, and image generation in single conversations
+
+#### **Smart Image Upload Behavior (November 2025)**
+
+The bot now intelligently handles @myker trigger detection for image uploads, giving users control over when they receive responses:
+
+**🔕 Silent Processing (Without @myker)**:
+```
+User: [uploads image]
+      "save this photo"
+      
+Bot: [Processes silently in background]
+     ✅ Image saved as artifact
+     ❌ No response sent back to user
+```
+
+**📢 Active Response (With @myker)**:
+```
+User: [uploads image]
+      "@myker analyze this photo"
+      
+Bot: ✅ "I can see a sunset over a beach..."
+     💬 Full response sent back to user
+```
+
+**Key Benefits**:
+- ✅ **No Double Mentions**: Avoids redundant @myker triggers when user includes it
+- ✅ **User Control**: Users decide when they want notifications vs silent saves
+- ✅ **Background Processing**: Images without @myker are still processed and saved
+- ✅ **Flexible Workflow**: Supports both quick saves and interactive analysis
+- ✅ **Smart Detection**: Checks for both `@myker` and `@92033062547666` triggers
+
+**Technical Implementation**:
+- Detects user-provided @myker mentions in caption text
+- Suppresses auto-generated trigger if user already included one
+- Sets `shouldSendResponse` flag to control response behavior
+- Backend artifact processing continues regardless of trigger presence
 
 ### ADK Agent Capabilities
 - **Multimodal Analysis**: 

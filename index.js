@@ -896,19 +896,37 @@ class WhatsAppBot {
 
             // Prepare message for ADK (combine text and media)
             let adkMessage = messageText;
+            let shouldSendResponse = true; // Default: send response back to user
             
             // Auto-trigger with appropriate mention when media is uploaded
             if (mediaParts.length > 0) {
                 const mentionTrigger = this.getMentionTrigger(remoteJid);
                 
-                if (!messageText) {
-                    // Media only: Request immediate artifact saving and smart renaming
-                    adkMessage = `${mentionTrigger} I've uploaded a media file "${uploadedFilename}". Please save this inline_data as an artifact first, then rename it with a smart descriptive filename based on what you see in the content.`;
+                // Check if user already included the trigger word
+                const hasUserMention = messageText && 
+                    (messageText.toLowerCase().includes('@myker') || 
+                     messageText.toLowerCase().includes('@92033062547666'));
+                
+                if (hasUserMention) {
+                    // User explicitly mentioned @myker - send response back
+                    // Keep their original message (avoid double mention)
+                    shouldSendResponse = true;
+                    adkMessage = messageText; // Use user's message as-is
+                    logger.info(`✅ User included @myker trigger - response will be sent back`);
                 } else {
-                    // Media + text: Single cohesive workflow instruction
-                    adkMessage = `${mentionTrigger} Please help me with this image-based request: ${messageText}
+                    // No @myker trigger - process silently in background
+                    shouldSendResponse = false;
+                    
+                    if (!messageText) {
+                        // Media only: Request immediate artifact saving and smart renaming (silent)
+                        adkMessage = `${mentionTrigger} I've uploaded a media file "${uploadedFilename}". Please save this inline_data as an artifact first, then rename it with a smart descriptive filename based on what you see in the content.`;
+                    } else {
+                        // Media + text: Single cohesive workflow instruction (silent)
+                        adkMessage = `${mentionTrigger} Please help me with this image-based request: ${messageText}
 
 I've uploaded an image "${uploadedFilename}" that you'll need for this task. Please first save it as an artifact, rename it descriptively, and make it public to get a URL. Then use that public URL to complete my request.`;
+                    }
+                    logger.info(`🔇 No @myker trigger - processing silently (no response will be sent)`);
                 }
             }
             
@@ -919,11 +937,12 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
             // }
 
             // Send message to ADK with streaming (including media parts)
-            logger.info(`🚀 Sending to ADK: message="${adkMessage}", mediaParts=${mediaParts.length}, session=${session.sessionId}, userName="${userName}"`);
+            logger.info(`🚀 Sending to ADK: message="${adkMessage}", mediaParts=${mediaParts.length}, session=${session.sessionId}, userName="${userName}", shouldSendResponse=${shouldSendResponse}`);
             const response = await this.sendToADK(adkMessage, session.sessionId, userId, remoteJid, mediaParts, userName);
             logger.info(`📨 ADK Response received: ${response ? 'Success' : 'No response'}`);
             
-            if (response) {
+            // Only send response back to user if shouldSendResponse is true
+            if (response && shouldSendResponse) {
                 // Handle multimodal response (text + images)
                 if (typeof response === 'object' && (response.text || response.images)) {
                     // Send text message if present
@@ -944,6 +963,8 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
                     logger.info(`📤 Sending fallback text response to user: ${response.substring(0, 100)}...`);
                     await this.sendMessage(remoteJid, response);
                 }
+            } else if (response && !shouldSendResponse) {
+                logger.info(`🔇 Response received but suppressed (no @myker trigger) - processed silently in background`);
             } else {
                 logger.info(`ℹ️ No response from ADK, message handling complete`);
             }
