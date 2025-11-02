@@ -979,6 +979,17 @@ mcp_tools = MCPToolset(
     ),
 )
 
+# Log GitHub MCP toolset initialization
+try:
+    logger.info(f"[GITHUB MCP] Initializing GitHub MCP toolset")
+    logger.info(f"[GITHUB MCP] Token present: {bool(github_token)}")
+    logger.info(f"[GITHUB MCP] Token prefix: {github_token[:10] if github_token else 'None'}...")
+    # Try to get tool list to verify connection
+    # Note: This will be available after the toolset is fully initialized by ADK
+    logger.info(f"[GITHUB MCP] MCPToolset created successfully")
+except Exception as e:
+    logger.error(f"[GITHUB MCP] Error during initialization: {e}")
+
 # Create the fal.ai MCP toolset (stdio connection)
 # Fixed **kwargs compatibility issue by removing problematic functions from generate.py
 import os
@@ -1001,14 +1012,33 @@ async def github_mcp_after_callback(callback_context: CallbackContext) -> None:
     to prevent JSON serialization errors.
     """
     try:
+        logger.info("[GITHUB MCP CALLBACK] GitHub MCP agent callback invoked")
         # Check if we have a tool result that needs serialization
         if hasattr(callback_context, 'tool_result') and callback_context.tool_result is not None:
             # Serialize the result to handle Pydantic types like AnyUrl
             callback_context.tool_result = serialize_pydantic_to_dict(callback_context.tool_result)
             logger.info("[GITHUB MCP] Serialized tool result to JSON-compatible format")
+        else:
+            logger.info("[GITHUB MCP CALLBACK] No tool result to serialize")
     except Exception as e:
         logger.error(f"[GITHUB MCP] Error serializing tool result: {e}")
         # Don't fail the callback, just log the error
+
+
+async def github_mcp_before_callback(callback_context: CallbackContext) -> None:
+    """Log when GitHub MCP agent is invoked"""
+    try:
+        logger.info("[GITHUB MCP] ===== GitHub MCP Agent Invoked =====")
+        if hasattr(callback_context, '_invocation_context'):
+            user_content = callback_context._invocation_context.user_content
+            if user_content and hasattr(user_content, 'parts'):
+                message_text = ""
+                for part in user_content.parts:
+                    if hasattr(part, 'text') and part.text:
+                        message_text += part.text + " "
+                logger.info(f"[GITHUB MCP] User request: {message_text.strip()[:200]}")
+    except Exception as e:
+        logger.error(f"[GITHUB MCP] Error in before callback: {e}")
 
 
 # Create the GitHub MCP subagent with serialization callback
@@ -1017,6 +1047,7 @@ github_mcp_agent = Agent(
     name="github_mcp_agent",
     instruction=GITHUB_MCP_PROMPT,
     tools=[mcp_tools],
+    before_agent_callback=github_mcp_before_callback,
     after_agent_callback=github_mcp_after_callback,
 )
 
@@ -1029,8 +1060,19 @@ fal_mcp_agent = Agent(
     tools=[fal_mcp_tools],
 )
 
-# Create AgentTool from the GitHub MCP subagent
-github_mcp_tool = AgentTool(agent=github_mcp_agent)
+# Create AgentTool from the GitHub MCP subagent with clear description
+github_mcp_tool = AgentTool(
+    agent=github_mcp_agent,
+    name="github_operations",
+    description="""Use this tool for ALL GitHub operations including:
+- Creating, updating, or managing GitHub issues
+- Creating, updating, or managing pull requests  
+- Managing GitHub repositories (create, fork, etc.)
+- Working with GitHub branches and commits
+- Searching GitHub code, issues, or repositories
+- Any task that requires interacting with GitHub
+This tool has full access to the Michaelktker/my-agentic-rag repository and can perform read and write operations."""
+)
 
 # Create AgentTool from the fal.ai MCP subagent
 fal_mcp_tool = AgentTool(agent=fal_mcp_agent)
@@ -1092,11 +1134,15 @@ async def before_agent_callback(callback_context: CallbackContext) -> None:
 
 
 async def after_agent_callback(callback_context: CallbackContext) -> None:
-    """Log completion of agent processing."""
+    """Log completion of agent processing and track tool usage."""
     # Enforce exact timeout message for poll_fal_operation
     try:
         tool_name = getattr(callback_context, 'tool_name', None)
         result = getattr(callback_context, 'tool_result', None)
+        
+        # Log tool usage for debugging
+        if tool_name:
+            logger.info(f"[ROOT AGENT] Tool called: {tool_name}")
         
         # Debug: log what we're getting
         print(f"[CALLBACK DEBUG] Tool name: {tool_name}, Result type: {type(result)}")
