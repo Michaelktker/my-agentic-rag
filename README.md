@@ -1,5 +1,7 @@
 # My Agentic RAG - WhatsApp ADK Bot
 
+hello checking in
+
 A comprehensive Retrieval-Augmented Generation (RAG) system with WhatsApp integration, built using Google's Agent Development Kit (ADK). This production-ready application combines intelligent document search, GitHub repository integration, WhatsApp multimodal communication, and advanced artifact management.
 
 **📘 Documentation**:
