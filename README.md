@@ -464,6 +464,49 @@ Bot: ✅ "I can see a sunset over a beach..."
 - Sets `shouldSendResponse` flag to control response behavior
 - Backend artifact processing continues regardless of trigger presence
 
+#### **Large Media File Handling (November 2025)**
+
+The bot now intelligently handles large media files (videos, high-resolution images) by uploading them to Google Cloud Storage instead of sending them inline:
+
+**📦 Automatic Size Detection**:
+- **Small files (<20MB)**: Sent inline as base64 (traditional method)
+- **Large files (>20MB)**: Uploaded to GCS, URL sent to ADK instead
+- **Smart Threshold**: Prevents Cloud Run 413 errors (32MB request limit)
+
+**🔄 Processing Flow for Large Files**:
+```
+1. Download video from WhatsApp (e.g., 25MB video)
+2. Detect file size exceeds 20MB threshold
+3. Upload to GCS bucket: whatsapp-media-uploads
+4. Generate public URL: https://storage.googleapis.com/...
+5. Send URL to ADK instead of base64 data
+6. ADK processes video from GCS URL
+```
+
+**Key Benefits**:
+- ✅ **No 413 Errors**: Avoids Cloud Run request size limit failures
+- ✅ **Efficient Transfer**: URL reference instead of 33% base64 overhead
+- ✅ **Universal Support**: Works for videos, high-res images, large documents
+- ✅ **Automatic Fallback**: Seamless switching between inline/GCS based on size
+- ✅ **Public Access**: Files automatically made public for ADK access
+
+**Technical Details**:
+- **Threshold**: 20MB (configurable via `LARGE_FILE_THRESHOLD` env var)
+- **Base64 Overhead**: Adds ~33% to file size (25MB → 33MB encoded)
+- **GCS Bucket**: `whatsapp-media-uploads` in `staging-adk` project
+- **URL Format**: Uses `file_data.file_uri` instead of `inline_data.data`
+- **Location**: Files stored in `whatsapp-uploads/` folder with original filenames
+- **Compatibility**: ADK Gemini models support both inline_data and file_data formats
+
+**Example Log Output**:
+```
+📊 File size: 25.3MB (threshold: 20.0MB)
+📦 Large file detected - uploading to GCS instead of inline base64
+⬆️  Uploading large file to GCS: media_abc123.mp4 (25.30MB)
+✅ File uploaded to GCS: https://storage.googleapis.com/whatsapp-media-uploads/whatsapp-uploads/media_abc123.mp4
+✅ Large file uploaded to GCS: media_abc123.mp4 (video/mp4)
+```
+
 ### ADK Agent Capabilities
 - **Multimodal Analysis**: 
   - **Images**: Object detection, OCR, composition analysis, content description

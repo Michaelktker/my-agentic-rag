@@ -28,6 +28,7 @@ const ADK_APP_NAME = process.env.ADK_APP_NAME || config.adk.appName;
 const BUCKET_NAME = process.env.BUCKET_NAME || config.gcs.bucketName;
 // Note: ARTIFACTS_BUCKET_NAME removed - artifact persistence now handled server-side by ADK
 const PROJECT_ID = process.env.PROJECT_ID || config.gcs.projectId;
+const MEDIA_BUCKET_NAME = process.env.MEDIA_BUCKET_NAME || config.gcs.mediaBucketName || 'whatsapp-media-uploads';
 
 // ADK Endpoint Configuration with fallback
 const PRODUCTION_ADK_URL = process.env.PRODUCTION_ADK_URL || 'https://my-agentic-rag-638797485217.us-central1.run.app';
@@ -35,17 +36,25 @@ const STAGING_ADK_URL = process.env.STAGING_ADK_URL || 'https://my-agentic-rag-4
 const LOCALHOST_ADK_URL = process.env.LOCALHOST_ADK_URL || 'http://localhost:8000';
 const HEALTH_CHECK_TIMEOUT = parseInt(process.env.HEALTH_CHECK_TIMEOUT || '5000'); // 5 seconds in milliseconds
 
+// Large file handling configuration
+const LARGE_FILE_THRESHOLD = parseInt(process.env.LARGE_FILE_THRESHOLD || '20971520'); // 20MB (leaves headroom for 32MB Cloud Run limit)
+
 console.log('🔧 WhatsApp Bot Configuration:');
 console.log(`📍 Production ADK URL: ${PRODUCTION_ADK_URL}`);
 console.log(`📍 Staging ADK URL: ${STAGING_ADK_URL}`);
 console.log(`📍 Localhost ADK URL: ${LOCALHOST_ADK_URL}`);
 console.log(`🏥 Health check timeout: ${HEALTH_CHECK_TIMEOUT}ms`);
 console.log(`📱 App Name: ${ADK_APP_NAME}`);
+console.log(`📦 Media Bucket: ${MEDIA_BUCKET_NAME}`);
+console.log(`📏 Large file threshold: ${(LARGE_FILE_THRESHOLD / 1024 / 1024).toFixed(1)}MB`);
 
-// Initialize Google Cloud Storage for session management only
+// Initialize Google Cloud Storage for session management and media uploads
 const storage = new Storage({ projectId: PROJECT_ID });
 const bucket = storage.bucket(BUCKET_NAME);
+// Initialize media bucket for large file uploads (videos exceeding Cloud Run limits)
+const mediaBucket = storage.bucket(MEDIA_BUCKET_NAME);
 // Note: artifactsBucket removed - artifact operations now handled server-side by ADK
+
 
 // Logger configuration
 const logger = P({
@@ -252,6 +261,43 @@ class MediaHandler {
     }
 
     /**
+     * Upload large media file to GCS and return public URL
+     * Used for files exceeding Cloud Run request size limits (>20MB)
+     */
+    async uploadToGCS(buffer, filename, mimeType) {
+        try {
+            const file = mediaBucket.file(`whatsapp-uploads/${filename}`);
+            
+            logger.info(`⬆️  Uploading large file to GCS: ${filename} (${(buffer.length / 1024 / 1024).toFixed(2)}MB)`);
+            
+            // Upload file to GCS
+            await file.save(buffer, {
+                contentType: mimeType,
+                metadata: {
+                    cacheControl: 'public, max-age=31536000',
+                    metadata: {
+                        uploadedAt: new Date().toISOString(),
+                        source: 'whatsapp-bot'
+                    }
+                }
+            });
+
+            // Make file publicly accessible
+            await file.makePublic();
+
+            // Get public URL
+            const publicUrl = `https://storage.googleapis.com/${MEDIA_BUCKET_NAME}/whatsapp-uploads/${filename}`;
+            
+            logger.info(`✅ File uploaded to GCS: ${publicUrl}`);
+            
+            return publicUrl;
+        } catch (error) {
+            logger.error('❌ Error uploading to GCS:', error);
+            throw new Error(`Failed to upload file to cloud storage: ${error.message}`);
+        }
+    }
+
+    /**
      * Generate a random filename if not provided
      */
     generateRandomFilename(mimeType) {
@@ -351,6 +397,11 @@ class MediaHandler {
                 filename = this.generateRandomFilename(mimeType);
             }
 
+            // Check file size (before base64 encoding which adds ~33% overhead)
+            const fileSizeBytes = buffer.length;
+            const fileSizeMB = fileSizeBytes / 1024 / 1024;
+            logger.info(`📊 File size: ${fileSizeMB.toFixed(2)}MB (threshold: ${(LARGE_FILE_THRESHOLD / 1024 / 1024).toFixed(1)}MB)`);
+
             // Handle unsupported Office formats - convert to text since Gemini doesn't support them
             if (mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
                 logger.info(`Converting XLSX file to text format: ${filename}`);
@@ -405,7 +456,36 @@ class MediaHandler {
                 };
             }
 
-            // Create ADK Part object (convert buffer to base64 for ADK API)
+            // Check if file is too large for inline base64 (would exceed Cloud Run 32MB limit)
+            if (fileSizeBytes > LARGE_FILE_THRESHOLD) {
+                logger.info(`📦 Large file detected (${fileSizeMB.toFixed(2)}MB) - uploading to GCS instead of inline base64`);
+                
+                // Upload to GCS and get public URL
+                const publicUrl = await this.uploadToGCS(buffer, filename, mimeType);
+                
+                // Create Part object with file_data (URL reference) instead of inline_data
+                const part = {
+                    file_data: {
+                        mime_type: mimeType,
+                        file_uri: publicUrl
+                    },
+                    mimeType: mimeType,
+                    fileUri: publicUrl
+                };
+
+                logger.info(`✅ Large file uploaded to GCS: ${filename} (${mimeType}) -> ${publicUrl}`);
+                
+                return {
+                    filename,
+                    mimeType,
+                    part,
+                    isLargeFile: true,
+                    fileUri: publicUrl,
+                    fileSizeMB: fileSizeMB.toFixed(2)
+                };
+            }
+
+            // Small files: use inline base64 data (original behavior)
             const part = {
                 inline_data: {
                     mime_type: mimeType,
@@ -415,12 +495,13 @@ class MediaHandler {
                 data: buffer
             };
 
-            logger.info(`Processed media file: ${filename} (${mimeType}) for user ${userId}`);
+            logger.info(`Processed media file: ${filename} (${mimeType}, ${fileSizeMB.toFixed(2)}MB) for user ${userId}`);
             
             return {
                 filename,
                 mimeType,
-                part
+                part,
+                fileSizeMB: fileSizeMB.toFixed(2)
             };
 
         } catch (error) {
