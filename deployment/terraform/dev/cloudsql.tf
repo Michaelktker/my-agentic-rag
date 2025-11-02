@@ -20,7 +20,8 @@ resource "google_sql_database_instance" "adk_sessions" {
   project          = var.dev_project_id
 
   settings {
-    tier = "db-f1-micro" # Smallest tier for dev (~$7/month)
+    tier = "db-g1-small" # Upgraded from f1-micro for better stability (~$27/month, 1.7GB RAM)
+    # db-f1-micro (0.6GB RAM) was causing connection failures with PostgreSQL connection pools
     
     disk_size    = 10 # GB
     disk_type    = "PD_SSD"

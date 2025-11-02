@@ -282,6 +282,43 @@ We've resolved critical deployment issues that were preventing production deploy
 - **Deployment**: Both staging and production environments deployed successfully
 - **Status**: ✅ WhatsApp bot now communicating properly with Cloud Run endpoint
 
+### November 2025 Cloud SQL Connection Stability Fixes
+Critical infrastructure improvements to resolve database connection failures:
+
+#### ✅ **Cloud SQL Instance Tier Upgrade (November 2, 2025)**
+- **Problem**: `db-f1-micro` (0.6GB RAM) causing connection failures at startup
+- **Error**: `psycopg2.OperationalError: server closed the connection unexpectedly`
+- **Root Cause**: Insufficient memory for PostgreSQL connection pool initialization
+- **Solution**: Upgraded staging environment to `db-g1-small` (1.7GB RAM)
+- **Impact**: 
+  - Stable database connections during Cloud Run container startup
+  - Better support for SQLAlchemy connection pooling
+  - Improved reliability under concurrent connection load
+- **Cost**: ~$27/month (up from $7/month) - acceptable for production stability
+
+#### ✅ **SQLAlchemy Connection Pool Optimization (November 2, 2025)**
+- **Problem**: Default connection pool settings overwhelming small database instances
+- **Solution**: Added optimized pool configuration in `server.py`:
+  - `pool_size=5`: Limit simultaneous connections (down from SQLAlchemy default of 10)
+  - `max_overflow=10`: Allow burst capacity for high load
+  - `pool_timeout=30`: Reasonable wait time for connection availability
+  - `pool_pre_ping=True`: Test connections before use (detect stale connections)
+  - `pool_recycle=3600`: Recycle connections every hour (prevent timeout issues)
+- **Benefits**:
+  - Reduced initial connection load during container startup
+  - Better connection lifecycle management
+  - Automatic handling of stale/disconnected connections
+  - Improved stability under varying load patterns
+- **Impact**: Cloud Run service now starts reliably without database connection errors
+
+#### ✅ **WhatsApp Bot Connectivity Restored**
+- **Before**: All endpoints (production, staging, localhost) failing health checks
+- **After**: Staging endpoint responding successfully to health checks
+- **Result**: WhatsApp bot can now:
+  - Successfully create ADK sessions
+  - Send messages to users via Cloud Run endpoint
+  - Access persistent session storage in Cloud SQL
+
 ### Core Components
 
 1. **WhatsApp Bot** (`index.js`)
