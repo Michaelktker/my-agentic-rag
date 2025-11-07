@@ -1,16 +1,151 @@
-# @Myker Mention Flow
+# @Myker Mention Flow & Terminal Commands
 
-**Architecture**: Mention-based activation pattern using ADK callbacks
+**Architecture**: Mention-based activation pattern using ADK callbacks + Terminal command routing
 
 ---
 
 ## Overview
 
-The WhatsApp bot uses a **mention-based activation pattern** where the agent only processes messages that explicitly mention `@Myker`. This prevents the bot from responding to every message in group chats and provides focused, intentional interactions.
+The WhatsApp bot uses two primary interaction patterns:
 
-## Implementation
+1. **@Myker Mention Pattern**: Agent only processes messages that explicitly mention `@Myker` for AI-powered conversations
+2. **Terminal Command Pattern**: Direct command execution via `/help`, `/ping`, `/sh`, `/tty`, `/cop` commands for infrastructure operations
 
-**Location**: `app/agent.py`  
+---
+
+## Message Routing Architecture
+
+```
+WhatsApp Message
+    ↓
+index.js: processMessage()
+    ↓
+Check for Terminal Commands (/help, /ping, /sh, /tty, /cop)
+    ├─ TERMINAL COMMAND ✅ → terminal-handler.js → Execute → Return
+    └─ NOT TERMINAL COMMAND ❌ → Continue to ADK
+         ↓
+Check for @Myker mention
+    ├─ NOT FOUND ❌ → Skip processing → "I only respond when mentioned..."
+    └─ FOUND ✅ → Clean message → ADK Agent → Process with tools
+```
+
+**Key Design**: Terminal commands are intercepted BEFORE ADK processing (line ~867 in index.js) to prevent conflicts and ensure fast command execution.
+
+---
+
+## Pattern 1: Terminal Command Flow (November 2025)
+
+**New Feature**: Secure cloud terminal for infrastructure management
+
+### Terminal Command Routing
+
+**Location**: `index.js` → `terminal-handler.js`
+
+```javascript
+// Early interception before ADK
+if (terminalHandler.shouldHandle(from)) {
+  const handled = await terminalHandler.handleTerminalMessage(sock, from, messageText);
+  if (handled) return; // Stop processing, terminal handled it
+}
+```
+
+### Terminal Commands
+
+| Command | Purpose | Example | Security |
+|---------|---------|---------|----------|
+| `/help` | Show available commands | `/help` | JID allowlist |
+| `/ping` | Check terminal status | `/ping` | JID allowlist |
+| `/sh <cmd>` | One-shot shell command | `/sh terraform version` | Triple-layer validation |
+| `/tty start` | Start interactive PTY | `/tty start` | JID + idle timeout |
+| `/tty stop` | Stop PTY session | `/tty stop` | JID + session owner |
+| `/cop <prompt>` | GitHub Copilot CLI | `/cop what is terraform` | JID + GitHub token |
+
+### Terminal Processing Flow
+
+```
+Terminal Message (e.g., "/sh terraform version")
+    ↓
+terminal-handler.js: handleTerminalMessage()
+    ↓
+Security Layer 1: isAllowedJid(from)
+    ├─ NOT ALLOWED ❌ → Send "Access denied" → Stop
+    └─ ALLOWED ✅ → Continue
+         ↓
+Parse command type (/help, /ping, /sh, /tty, /cop)
+    ↓
+Security Layer 2: prefixAllowed() [for /sh and /tty]
+    ├─ NOT ALLOWED ❌ → Send "Command not in allowlist" → Stop
+    └─ ALLOWED ✅ → Continue
+         ↓
+Security Layer 3: sanitize() [block dangerous symbols]
+    ├─ BLOCKED SYMBOLS ❌ → Send "Contains blocked symbol" → Stop
+    └─ CLEAN ✅ → Execute
+         ↓
+Execute command (exec(), spawn(), or PTY)
+    ↓
+Output handling:
+    ├─ Small (<3000 chars) → Send as text message
+    └─ Large (>3000 chars) → Save as file → Send as document
+```
+
+### Example: `/sh terraform version`
+
+```
+1. User sends: "/sh terraform version"
+2. index.js detects terminal command
+3. terminal-handler.js validates:
+   - JID: 120363423143842705@g.us ✅
+   - Prefix: "terraform" in allowlist ✅
+   - Symbols: no dangerous chars ✅
+4. Execute: exec("terraform version")
+5. Output: "Terraform v1.13.5"
+6. Send as text message
+```
+
+### Example: `/cop what is terraform`
+
+```
+1. User sends: "/cop what is terraform"
+2. terminal-handler.js validates JID ✅
+3. Execute: copilot -p "what is terraform" --allow-all-tools
+4. Output: AI-powered explanation from GitHub Copilot
+5. Send as text message or file (based on length)
+```
+
+### Terminal Security Layers
+
+**Layer 1: JID Allowlist** (`config.json`)
+```json
+{
+  "terminal": {
+    "allowedJids": ["120363423143842705@g.us"]
+  }
+}
+```
+
+**Layer 2: Command Prefix Validation**
+```json
+{
+  "terminal": {
+    "allowedPrefixes": ["gcloud", "terraform", "gh", "copilot", "ls", "pwd", "cat"]
+  }
+}
+```
+
+**Layer 3: Symbol Blocking**
+```json
+{
+  "terminal": {
+    "blockedSymbols": [";", "&&", "||", "|", ">", "<", "`", "$", "(", ")"]
+  }
+}
+```
+
+---
+
+## Pattern 2: @Myker Mention Flow
+
+**Implementation**: `app/agent.py`  
 **Callbacks**: `before_agent_callback()`, `after_agent_callback()`
 
 ### Workflow Diagram

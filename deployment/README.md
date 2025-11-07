@@ -416,9 +416,146 @@ SELECT * FROM sessions LIMIT 10;
 
 ## WhatsApp Bot Deployment
 
-### Service Updates
-
 ### Initial Setup
+
+```bash
+# Create VM
+gcloud compute instances create whatsapp-bot \
+  --project=staging-adk \
+  --zone=us-central1-a \
+  --machine-type=e2-medium \
+  --image-family=debian-12 \
+  --image-project=debian-cloud \
+  --scopes=cloud-platform
+
+# Setup bot (one-time)
+./deployment/vm-setup.sh
+```
+
+### 🖥️ Cloud Terminal Integration (November 2025)
+
+The WhatsApp bot includes a **secure cloud terminal** that allows authorized users to execute infrastructure commands directly from WhatsApp.
+
+#### **Quick Start**
+
+```bash
+# 1. Deploy terminal handler and dependencies
+./deployment/deploy-to-vm.sh
+
+# 2. Install CLI tools on VM
+gcloud compute ssh whatsapp-bot --project=staging-adk --zone=us-central1-a
+sudo ./install-cli-tools.sh
+
+# 3. Configure GitHub token for Copilot CLI
+sudo mkdir -p /etc/systemd/system/whatsapp-bot.service.d
+sudo tee /etc/systemd/system/whatsapp-bot.service.d/github-token.conf > /dev/null <<EOF
+[Service]
+Environment="GITHUB_TOKEN=your_github_pat_with_copilot_requests_permission"
+EOF
+sudo chmod 600 /etc/systemd/system/whatsapp-bot.service.d/github-token.conf
+sudo systemctl daemon-reload
+sudo systemctl restart whatsapp-bot
+
+# 4. Verify installation
+terraform version && gh --version && copilot --version
+```
+
+#### **Installed CLI Tools**
+
+- **Terraform v1.13.5**: Infrastructure as code (`terraform plan`, `terraform apply`)
+- **Google Cloud CLI**: gcloud commands (project: staging-adk, ADC configured)
+- **GitHub CLI v2.83.0**: GitHub operations (`gh repo list`, `gh issue create`)
+- **GitHub Copilot CLI v0.0.354**: AI assistance (`copilot -p "help"`)
+
+#### **Available Commands**
+
+Use these commands in WhatsApp (authorized groups only):
+
+```bash
+/help                           # Show all terminal commands
+/ping                           # Check terminal status
+/sh <command>                   # Execute one-shot command
+/sh terraform version           # Example
+/sh gcloud compute instances list
+/tty start                      # Start interactive terminal
+/tty stop                       # Stop interactive terminal
+/cop <prompt>                   # Ask GitHub Copilot CLI
+/cop what is terraform          # Example
+```
+
+#### **Security Configuration**
+
+Terminal security is defined in `config.json`:
+
+```json
+{
+  "terminal": {
+    "allowedJids": ["120363423143842705@g.us"],
+    "maxTextLen": 3000,
+    "idleTtyTimeoutSec": 600,
+    "allowedPrefixes": ["gcloud", "terraform", "gh", "copilot", "ls", "pwd", "cat"],
+    "blockedSymbols": [";", "&&", "||", "|", ">", "<", "`", "$", "(", ")"]
+  }
+}
+```
+
+**Triple-Layer Security**:
+1. **JID Allowlist**: Only specific WhatsApp groups/users can access
+2. **Command Prefix Validation**: Only safe commands allowed
+3. **Symbol Blocking**: Prevents shell injection attacks
+
+#### **Maintenance Commands**
+
+```bash
+# View terminal logs
+gcloud compute ssh whatsapp-bot --project=staging-adk --zone=us-central1-a \
+  --command='sudo journalctl -u whatsapp-bot -f | grep -i terminal'
+
+# Update terminal handler
+./deployment/deploy-to-vm.sh  # Auto-deploys terminal-handler.js
+
+# Rotate GitHub token
+sudo nano /etc/systemd/system/whatsapp-bot.service.d/github-token.conf
+sudo systemctl daemon-reload && sudo systemctl restart whatsapp-bot
+
+# Add/remove allowed JIDs
+nano ~/whatsapp-bot/config.json  # Edit terminal.allowedJids
+sudo systemctl restart whatsapp-bot
+```
+
+#### **Troubleshooting**
+
+**Issue**: `/cop` fails with "No authentication information found"
+```bash
+# Check token is set
+sudo systemctl show whatsapp-bot | grep GITHUB_TOKEN
+
+# If missing, configure token (see Quick Start step 3)
+```
+
+**Issue**: node-pty compilation errors
+```bash
+sudo apt-get install -y build-essential python3 make gcc g++
+cd ~/whatsapp-bot && npm install node-pty
+```
+
+**Issue**: Terminal commands not responding
+```bash
+sudo journalctl -u whatsapp-bot -n 50 | grep -i "terminal"
+# Expected: "Terminal handler initialized"
+```
+
+#### **Files Involved**
+
+- `terminal-handler.js`: Core terminal implementation (528 lines)
+- `index.js`: Terminal integration and message routing
+- `config.json`: Security settings and allowlists
+- `deployment/install-cli-tools.sh`: CLI tools installation script
+- `deployment/auth-copilot.md`: Copilot authentication guide
+
+---
+
+### Service Updates
 
 Application updates are deployed automatically through the CI/CD pipeline:
 

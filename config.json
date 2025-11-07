@@ -26,5 +26,12 @@
     "logLevel": "info",
     "maxRetries": 3,
     "retryDelayMs": 5000
+  },
+  "terminal": {
+    "allowedJids": ["120363423143842705@g.us"],
+    "maxTextLen": 3000,
+    "idleTtyTimeoutSec": 600,
+    "allowedPrefixes": ["gcloud", "terraform", "gh", "copilot", "git", "ls", "cat", "echo", "jq", "tail", "head"],
+    "blockedSymbols": [";", "&&", ">", ">>", "2>", "$(",  ")"]
   }
 }

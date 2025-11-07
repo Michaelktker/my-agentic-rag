@@ -12,6 +12,7 @@ const { fileTypeFromBuffer } = require('file-type');
 const XLSX = require('xlsx');
 const mammoth = require('mammoth');
 const PQueue = require('p-queue').default;
+const TerminalHandler = require('./terminal-handler');
 
 // Load configuration
 let config;
@@ -658,6 +659,7 @@ class WhatsAppBot {
         this.pendingTimers = new Map(); // Track pending @Fal timers
         this.mediaHandler = new MediaHandler();
         this.sessionManager = new UserSessionManager();
+        this.terminalHandler = new TerminalHandler(logger, config); // Terminal command handler
         
         // Message queue with concurrency control
         // This prevents overwhelming the ADK service with too many concurrent requests
@@ -863,6 +865,14 @@ class WhatsAppBot {
      */
     async processMessage(message) {
         try {
+            
+            // Check for terminal commands first (before any other processing)
+            // This allows the terminal handler to intercept commands for the allowed group
+            const terminalHandled = await this.terminalHandler.handleTerminalMessage(this.sock, message);
+            if (terminalHandled) {
+                logger.info('Message handled by terminal handler');
+                return;
+            }
             
             // Enhanced debugging for PDF uploads
             logger.info(`Raw message received - message exists: ${!!message}`);
@@ -2064,19 +2074,28 @@ I've uploaded an image "${uploadedFilename}" that you'll need for this task. Ple
 }
 
 // Handle graceful shutdown
-process.on('SIGINT', () => {
+let botInstance = null;
+
+process.on('SIGINT', async () => {
     logger.info('Received SIGINT, shutting down gracefully...');
+    if (botInstance && botInstance.terminalHandler) {
+        await botInstance.terminalHandler.cleanup(botInstance.sock);
+    }
     process.exit(0);
 });
 
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
     logger.info('Received SIGTERM, shutting down gracefully...');
+    if (botInstance && botInstance.terminalHandler) {
+        await botInstance.terminalHandler.cleanup(botInstance.sock);
+    }
     process.exit(0);
 });
 
 // Start the bot
 if (require.main === module) {
     const bot = new WhatsAppBot();
+    botInstance = bot; // Store reference for cleanup
     bot.start().catch(error => {
         logger.error('Bot startup failed:', error);
         process.exit(1);

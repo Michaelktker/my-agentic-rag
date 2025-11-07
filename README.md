@@ -16,7 +16,7 @@ A comprehensive Retrieval-Augmented Generation (RAG) system with WhatsApp integr
 npm run start:check
 ```
 
-This will check dependencies, validate your setup, and start the WhatsApp bot with ADK integration.
+This will check dependencies, validate your setup, and start the WhatsApp bot with ADK integration and cloud terminal capabilities.
 
 ### ADK Server Only
 ```bash
@@ -91,6 +91,15 @@ A production-ready system that combines:
 
 ### Key Features (October 2025)
 
+#### **🖥️ Cloud Terminal Integration** (November 2025)
+- **Secure Terminal Access**: Execute cloud commands directly from WhatsApp
+- **Multi-Tool Support**: Terraform, Google Cloud CLI, GitHub CLI, GitHub Copilot CLI
+- **Triple Security Layer**: JID allowlist, command prefix validation, symbol blocking
+- **Interactive PTY Sessions**: Full terminal access with 10-minute idle timeout
+- **Smart Output Handling**: Automatic file delivery for large outputs (>3000 chars)
+- **Command Routing**: `/help`, `/ping`, `/sh`, `/tty`, `/cop` commands
+- **AI-Powered Assistance**: GitHub Copilot CLI for code and infrastructure help
+
 #### **🤖 Intelligent Agent System**
 - **Mention Activation**: Bot only responds to @Myker mentions for focused interactions
 - **Smart Media Renaming**: AI-powered descriptive filenames for uploaded media
@@ -108,6 +117,7 @@ A production-ready system that combines:
 - **Multimodal Support**: Images, videos, audio, documents (DOCX/XLSX conversion)
 - **Media Processing**: Automatic download, format conversion, and base64 encoding
 - **Artifact Integration**: Server-side persistence via ADK tool_context
+- **Cloud Terminal**: Secure command execution with Terraform, gcloud, GitHub CLI, Copilot CLI
 - **Error Handling**: Graceful fallbacks and user-friendly error messages
 - **Session Management**: Cloud SQL PostgreSQL for persistent ADK sessions
 
@@ -124,23 +134,24 @@ A production-ready system that combines:
 ### System Overview
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│            WhatsApp ADK Bot with Cloud SQL Persistence             │
+│     WhatsApp ADK Bot with Cloud Terminal & SQL Persistence         │
 ├─────────────────────────────────────────────────────────────────────┤
 │  WhatsApp ↔ Baileys ↔ Node.js Bot → Cloud Run ADK Service          │
-│                         │                    ↕                     │
-│                         │         ADK Agent (tool_context)         │
-│                         │         ↕          ↕         ↕           │
-│                   Auth State  PostgreSQL  GCS       AI Tools       │
+│                         │                    ↕                      │
+│                         │         ADK Agent (tool_context)          │
+│                         │         ↕          ↕         ↕            │
+│                   Auth State  PostgreSQL  GCS       AI Tools        │
 │                   (GCS)       Sessions  Artifacts                   │
-│                                  ↕          ↕         ↕             │
-│                              Persistent  Smart   GitHub MCP         │
-│                              Across      Naming                     │
-│                              Restarts      ↕         ↕             │
-│                                      Polling ← fal.ai MCP           │
-│                                      Agent     ↕                    │
-│                                         100+ AI Models              │
-│                                              ↕                     │
-│                                       Vertex Search                 │
+│                         ↕          ↕          ↕         ↕           │
+│                   Terminal   Persistent  Smart   GitHub MCP         │
+│                   Handler    Across      Naming                     │
+│                   (Secure)   Restarts      ↕         ↕             │
+│                      ↕                 Polling ← fal.ai MCP         │
+│                   Commands              Agent     ↕                 │
+│                   (gcloud,                   100+ AI Models         │
+│                   terraform,                      ↕                 │
+│                   gh,                      Vertex Search            │
+│                   copilot)                                          │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 

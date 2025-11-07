@@ -58,7 +58,7 @@ VM_NAME="whatsapp-bot"
 # Step 1: Copy application files to VM
 echo "📦 Step 1: Copying application files to VM..."
 gcloud compute scp --recurse \
-  index.js package.json package-lock.json config.json \
+  index.js terminal-handler.js package.json package-lock.json config.json \
   "${VM_NAME}:~/whatsapp-bot/" \
   --project="$PROJECT" \
   --zone="$ZONE"
@@ -74,6 +74,10 @@ gcloud compute ssh "$VM_NAME" \
 echo "📦 Upgrading to Node.js 20..."
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
+
+# Install build tools for node-pty
+echo "🔨 Installing build tools for native modules..."
+sudo apt-get install -y build-essential python3
 
 echo "✅ Node.js version:"
 node --version
