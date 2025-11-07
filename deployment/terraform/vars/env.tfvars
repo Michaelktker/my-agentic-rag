@@ -9,4 +9,7 @@ create_cb_connection = true
 create_repository = false
 github_app_installation_id = "54681073"
 github_pat_secret_id = "git-my-agentic-rag-github-oauthtoken-ddff64"
-fal_api_key = "14fcfa4a-1f68-4e1f-ac71-75088668eeac:ab3d5f08a5f11e46b820aa729748027e"
+# IMPORTANT: Set fal_api_key via environment variable or command line
+# Never commit actual API keys to version control
+# Usage: terraform apply -var="fal_api_key=$FAL_KEY"
+fal_api_key = ""

@@ -370,7 +370,7 @@ gcloud run services logs read my-agentic-rag \- **Source**: Generate from [https
 
   --region=us-central1 \- **Scope**: API access for image/video generation models
 
-  --project=staging-adk \- **Format**: `{key_id}:{secret}` (e.g., `14fcfa4a-1f68-4e1f-ac71-75088668eeac:ab3d5f08a5f11e46b820aa729748027e`)
+  --project=staging-adk \- **Format**: `{key_id}:{secret}` (e.g., `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy`)
 
   --limit=20 | grep "Session Service"
 

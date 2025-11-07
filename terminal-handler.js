@@ -23,6 +23,9 @@ class TerminalHandler {
         this.ALLOWED_PREFIXES = config.terminal.allowedPrefixes || [];
         this.BLOCKED_SYMBOLS = config.terminal.blockedSymbols || [];
         
+        // Workspace directory - default to project root
+        this.WORKSPACE_DIR = config.terminal.workspaceDir || '/workspaces/my-agentic-rag';
+        
         // PTY session tracking: Map<jid, { pty, lastActivity, idleTimer }>
         this.ptySessions = new Map();
         
@@ -30,6 +33,7 @@ class TerminalHandler {
         this.logger.info(`📋 Allowed JIDs: ${this.ALLOWED_JIDS.join(', ')}`);
         this.logger.info(`📏 Max text length: ${this.MAX_TEXT_LEN} chars`);
         this.logger.info(`⏱️  Idle TTY timeout: ${this.IDLE_TTY_TIMEOUT_SEC}s`);
+        this.logger.info(`📂 Workspace directory: ${this.WORKSPACE_DIR}`);
     }
 
     /**
@@ -155,9 +159,9 @@ class TerminalHandler {
             let stdout = '';
             let stderr = '';
             
-            // Use shell to execute command
+            // Use shell to execute command in workspace directory
             const child = spawn('bash', ['-c', command], {
-                cwd: process.cwd(),
+                cwd: this.WORKSPACE_DIR,
                 env: process.env,
                 shell: false // we're already using bash
             });
@@ -218,12 +222,12 @@ class TerminalHandler {
         try {
             this.logger.info(`🚀 Starting PTY session for ${jid}`);
             
-            // Create PTY
+            // Create PTY in workspace directory
             const ptyProcess = pty.spawn('bash', [], {
                 name: 'xterm-256color',
                 cols: 80,
                 rows: 24,
-                cwd: process.cwd(),
+                cwd: this.WORKSPACE_DIR,
                 env: process.env
             });
 
@@ -486,6 +490,7 @@ ${this.BLOCKED_SYMBOLS.join(' ')}
 • Only works in allowed groups
 • PTY sessions auto-timeout after ${this.IDLE_TTY_TIMEOUT_SEC}s
 • Large outputs sent as text files
+• All commands execute in: ${this.WORKSPACE_DIR}
         `.trim();
 
         await sock.sendMessage(jid, { text: help });
@@ -505,7 +510,7 @@ ${this.BLOCKED_SYMBOLS.join(' ')}
 🌍 **Region:** ${region}
 ⚙️  **Node:** ${process.version}
 🖥️  **Platform:** ${os.platform()} ${os.arch()}
-📂 **CWD:** ${process.cwd()}
+📂 **Workspace:** ${this.WORKSPACE_DIR}
 🔧 **Terminal:** Ready
 
 ✅ Terminal access enabled for this group

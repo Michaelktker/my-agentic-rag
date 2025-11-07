@@ -29,9 +29,10 @@
   },
   "terminal": {
     "allowedJids": ["120363423143842705@g.us"],
+    "workspaceDir": "/workspaces/my-agentic-rag",
     "maxTextLen": 3000,
     "idleTtyTimeoutSec": 600,
-    "allowedPrefixes": ["gcloud", "terraform", "gh", "copilot", "git", "ls", "cat", "echo", "jq", "tail", "head"],
+    "allowedPrefixes": ["gcloud", "terraform", "gh", "copilot", "git", "ls", "cat", "echo", "jq", "tail", "head", "cd", "pwd", "find", "grep", "npm", "node", "python", "pip", "docker", "kubectl", "make", "curl", "wget"],
     "blockedSymbols": [";", "&&", ">", ">>", "2>", "$(",  ")"]
   }
 }
