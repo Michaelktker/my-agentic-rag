@@ -1143,7 +1143,6 @@ async def before_agent_callback(callback_context: CallbackContext) -> None:
 
 async def after_agent_callback(callback_context: CallbackContext) -> None:
     """Log completion of agent processing and track tool usage."""
-    # Enforce exact timeout message for poll_fal_operation
     try:
         tool_name = getattr(callback_context, 'tool_name', None)
         result = getattr(callback_context, 'tool_result', None)
@@ -1177,8 +1176,18 @@ async def after_agent_callback(callback_context: CallbackContext) -> None:
             )
             callback_context.tool_result = enforced_message
             print(f"[CALLBACK DEBUG] Enforced message set successfully")
+        
+        # Remove usage statistics from response metadata if present
+        if hasattr(callback_context, '_invocation_context'):
+            invocation_ctx = callback_context._invocation_context
+            if hasattr(invocation_ctx, 'response') and invocation_ctx.response:
+                # Clear usage_metadata if it exists in the response
+                if hasattr(invocation_ctx.response, 'usage_metadata'):
+                    invocation_ctx.response.usage_metadata = None
+                    logger.info("[ROOT AGENT] Removed usage_metadata from response")
+                
     except Exception as e:
-        print(f"[MENTION CHECK] Error in after_agent_callback (enforce timeout): {e}")
+        print(f"[MENTION CHECK] Error in after_agent_callback: {e}")
 
 
 tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, save_inline_media_tool, rename_media_artifact_tool, make_public_tool, poll_fal_tool]

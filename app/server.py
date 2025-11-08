@@ -24,6 +24,8 @@ load_dotenv()
 
 import google.auth
 from fastapi import FastAPI, BackgroundTasks, Request
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from google.adk.cli.fast_api import get_fast_api_app
 from google.cloud import logging as google_cloud_logging
 from opentelemetry import trace
@@ -141,6 +143,64 @@ app = get_fast_api_app(
 )
 app.title = "my-agentic-rag"
 app.description = "API for interacting with the Agent my-agentic-rag"
+
+
+class RemoveUsageMetadataMiddleware(BaseHTTPMiddleware):
+    """Middleware to remove usage statistics from API responses."""
+    
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        
+        # Only process JSON responses
+        if response.headers.get("content-type", "").startswith("application/json"):
+            # Read the response body
+            body = b""
+            async for chunk in response.body_iterator:
+                body += chunk
+            
+            try:
+                # Parse JSON
+                data = json.loads(body.decode())
+                
+                # Remove usage_metadata at any level in the response
+                def remove_usage_metadata(obj):
+                    if isinstance(obj, dict):
+                        # Remove usage_metadata keys
+                        if 'usage_metadata' in obj:
+                            del obj['usage_metadata']
+                        if 'usageMetadata' in obj:
+                            del obj['usageMetadata']
+                        # Also remove specific usage fields
+                        for key in ['prompt_token_count', 'candidates_token_count', 
+                                   'total_token_count', 'promptTokenCount', 
+                                   'candidatesTokenCount', 'totalTokenCount']:
+                            if key in obj:
+                                del obj[key]
+                        # Recursively process nested objects
+                        for value in obj.values():
+                            remove_usage_metadata(value)
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            remove_usage_metadata(item)
+                
+                remove_usage_metadata(data)
+                
+                # Return modified response
+                return JSONResponse(
+                    content=data,
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    media_type=response.media_type
+                )
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                # If we can't parse the JSON, return the original response
+                pass
+        
+        return response
+
+
+# Add the middleware to the app
+app.add_middleware(RemoveUsageMetadataMiddleware)
 
 
 @app.get("/health")
