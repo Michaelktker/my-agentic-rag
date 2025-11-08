@@ -186,10 +186,14 @@ class RemoveUsageMetadataMiddleware(BaseHTTPMiddleware):
                 remove_usage_metadata(data)
                 
                 # Return modified response
+                # Note: Don't copy Content-Length header as JSONResponse will set it correctly
+                headers = {k: v for k, v in response.headers.items() 
+                          if k.lower() not in ('content-length', 'transfer-encoding')}
+                
                 return JSONResponse(
                     content=data,
                     status_code=response.status_code,
-                    headers=dict(response.headers),
+                    headers=headers,
                     media_type=response.media_type
                 )
             except (json.JSONDecodeError, UnicodeDecodeError):
