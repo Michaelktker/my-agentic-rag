@@ -479,6 +479,8 @@ DO NOT try to poll yourself - just return the information and let the parent age
 # GIF Generator agent prompt
 GIF_GENERATOR_PROMPT = """You are a specialized GIF generator agent that converts short video clips into animated GIFs.
 
+**CRITICAL: You must ALWAYS return complete responses. NEVER return empty or blank messages.**
+
 ## YOUR ROLE:
 Convert video URLs into optimized animated GIF files using MoviePy library.
 
@@ -539,6 +541,32 @@ User: "Create a small GIF from this video"
    - ✅ "Successfully converted! The GIF is saved as [filename]"
 
 **Think of it like this**: It's like using a calculator - you get the answer INSTANTLY when you press "=". Same here - the tool returns the completed GIF immediately.
+
+## RESPONSE FORMAT - ABSOLUTELY CRITICAL:
+
+When you call convert_video_to_gif, it returns a complete response message. You MUST:
+1. **ALWAYS return the EXACT tool output** - do not truncate, summarize, or say "empty response"
+2. **If the tool returns text, REPEAT IT VERBATIM** in your response
+3. **NEVER return empty or blank responses** - if you get tool output, share it with the user
+4. **If you see ✅ in the tool output, it means SUCCESS** - relay this to the user immediately
+5. **The tool NEVER returns empty strings** - if you think you got an empty response, you're misreading it
+
+Example of CORRECT behavior:
+- Tool returns: "✅ Successfully converted video to GIF!..."
+- You respond: "✅ Successfully converted video to GIF!..." (the FULL message)
+
+Example of WRONG behavior:
+- Tool returns: "✅ Successfully converted video to GIF!..."
+- You respond: "" (empty) ❌ NEVER DO THIS
+- You respond: "Processing..." ❌ NEVER DO THIS
+- You respond: "The tool returned an empty response" ❌ NEVER DO THIS - the tool NEVER returns empty!
+
+**WORKFLOW:**
+1. User requests GIF conversion
+2. You call convert_video_to_gif with appropriate parameters
+3. Tool returns a SUCCESS or ERROR message (NEVER empty!)
+4. You IMMEDIATELY share the complete tool message with the user
+5. DO NOT add extra commentary - just return what the tool gave you
 
 Always execute the conversion and return the resulting GIF details to the user RIGHT AWAY."""
 
@@ -720,8 +748,10 @@ When users provide Google Cloud Storage URLs (format: storage.googleapis.com wit
 4. **For GIF conversion**: Delegate to gif_generator_agent_tool to convert video URLs to animated GIFs
    - ⚠️ **CRITICAL DIFFERENCE FROM FAL.AI**: GIF conversion is SYNCHRONOUS (instant, no polling needed)
    - When gif_generator_agent_tool returns, the GIF is 100% COMPLETE - it's not "processing", it's DONE
-   - **NEVER SAY**: "I'm currently processing", "I'm waiting for", "Check back later"
+   - **The gif_generator_agent_tool ALWAYS returns a non-empty response** - either success or error message
+   - **NEVER SAY**: "I'm currently processing", "I'm waiting for", "Check back later", "empty response"
    - **ALWAYS SAY**: "Your GIF is ready!" or "Successfully converted!" when the tool returns
+   - **RELAY THE COMPLETE TOOL RESPONSE** to the user - do not summarize or truncate
    - Think: Calculator analogy - you get the answer instantly, no waiting
 5. **For image-to-video**: Use `rename_and_save_media_artifact` first, then `make_artifact_public`, then delegate to fal_mcp_agent
 6. **For audio with reference**: Process uploaded audio files if needed before generation
@@ -1185,6 +1215,8 @@ async def convert_video_to_gif(
 The animated GIF has been {"saved as an artifact and is" if artifact_saved else "created and is"} ready to use!"""
         
         logger.info(f"[GIF GENERATOR] Conversion completed successfully")
+        logger.info(f"[GIF GENERATOR] ===== RETURNING SUCCESS MESSAGE (length={len(success_msg)} chars) =====")
+        logger.info(f"[GIF GENERATOR] Message preview: {success_msg[:200]}")
         return success_msg
         
     except requests.exceptions.RequestException as e:
