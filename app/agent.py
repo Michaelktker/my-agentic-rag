@@ -1031,81 +1031,150 @@ async def convert_video_to_gif(
         str: Success message with GIF details or error message
     """
     try:
-        from moviepy.editor import VideoFileClip
+        # Import check with better error message
+        try:
+            from moviepy.editor import VideoFileClip
+        except ImportError as import_error:
+            logger.error(f"[GIF GENERATOR] MoviePy import failed: {import_error}")
+            return f"❌ MoviePy library not available: {str(import_error)}\n\nPlease ensure moviepy is installed in the deployment environment."
+        
         import tempfile
         import requests
         
         logger.info(f"[GIF GENERATOR] Starting conversion for URL: {video_url}")
+        logger.info(f"[GIF GENERATOR] Parameters: start_time={start_time}, duration={duration}, fps={fps}, resize_width={resize_width}")
         
         # Download video to temporary file
         logger.info(f"[GIF GENERATOR] Downloading video from URL...")
-        response = requests.get(video_url, stream=True, timeout=30)
-        response.raise_for_status()
+        try:
+            response = requests.get(video_url, stream=True, timeout=60, allow_redirects=True)
+            response.raise_for_status()
+            logger.info(f"[GIF GENERATOR] Download successful. Content-Type: {response.headers.get('Content-Type')}, Size: {response.headers.get('Content-Length')} bytes")
+        except requests.exceptions.Timeout:
+            logger.error(f"[GIF GENERATOR] Download timeout after 60 seconds")
+            return f"❌ Download timeout: The video URL took too long to respond (>60s). Please try a different video or check the URL."
+        except requests.exceptions.HTTPError as http_err:
+            logger.error(f"[GIF GENERATOR] HTTP error: {http_err}")
+            return f"❌ HTTP error downloading video: {http_err}\n\nThe video URL may be invalid or access restricted."
         
         # Create temporary files for video and GIF
         with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_video:
             video_path = temp_video.name
+            downloaded_bytes = 0
             for chunk in response.iter_content(chunk_size=8192):
                 temp_video.write(chunk)
+                downloaded_bytes += len(chunk)
         
-        logger.info(f"[GIF GENERATOR] Video downloaded to: {video_path}")
+        logger.info(f"[GIF GENERATOR] Video downloaded to: {video_path}, Size: {downloaded_bytes} bytes")
         
         # Load video clip
-        logger.info(f"[GIF GENERATOR] Loading video clip...")
-        video = VideoFileClip(video_path)
+        logger.info(f"[GIF GENERATOR] Loading video clip with MoviePy...")
+        try:
+            video = VideoFileClip(video_path)
+            logger.info(f"[GIF GENERATOR] Video loaded: duration={video.duration}s, size={video.size}, fps={video.fps}")
+        except Exception as video_error:
+            logger.error(f"[GIF GENERATOR] Failed to load video: {video_error}")
+            return f"❌ Failed to load video file: {str(video_error)}\n\nThe video format might not be supported by MoviePy."
         
         # Calculate end time
         end_time = start_time + duration if duration else video.duration
+        logger.info(f"[GIF GENERATOR] Clip segment: {start_time}s to {end_time}s (total: {end_time - start_time}s)")
+        
+        # Validate time range
+        if start_time >= video.duration:
+            video.close()
+            return f"❌ Start time ({start_time}s) exceeds video duration ({video.duration}s)"
+        
+        if end_time > video.duration:
+            logger.warning(f"[GIF GENERATOR] End time adjusted from {end_time}s to {video.duration}s")
+            end_time = video.duration
         
         # Extract subclip
         logger.info(f"[GIF GENERATOR] Extracting clip from {start_time}s to {end_time}s")
-        clip = video.subclip(start_time, end_time)
+        try:
+            clip = video.subclip(start_time, end_time)
+            logger.info(f"[GIF GENERATOR] Clip extracted successfully")
+        except Exception as clip_error:
+            logger.error(f"[GIF GENERATOR] Failed to extract clip: {clip_error}")
+            video.close()
+            return f"❌ Failed to extract clip: {str(clip_error)}"
         
         # Resize if requested
         if resize_width:
             logger.info(f"[GIF GENERATOR] Resizing to width: {resize_width}px")
-            clip = clip.resize(width=resize_width)
+            try:
+                clip = clip.resize(width=resize_width)
+                logger.info(f"[GIF GENERATOR] Resized to: {clip.w}x{clip.h}")
+            except Exception as resize_error:
+                logger.warning(f"[GIF GENERATOR] Resize failed: {resize_error}, continuing with original size")
         
         # Create GIF in temporary file
         with tempfile.NamedTemporaryFile(suffix='.gif', delete=False) as temp_gif:
             gif_path = temp_gif.name
         
-        logger.info(f"[GIF GENERATOR] Creating GIF with {fps} fps...")
-        clip.write_gif(gif_path, fps=fps)
+        logger.info(f"[GIF GENERATOR] Creating GIF with {fps} fps at {gif_path}...")
+        try:
+            clip.write_gif(gif_path, fps=fps, logger=None)  # Suppress MoviePy's verbose output
+            logger.info(f"[GIF GENERATOR] GIF file created successfully")
+        except Exception as gif_error:
+            logger.error(f"[GIF GENERATOR] Failed to create GIF: {gif_error}")
+            clip.close()
+            video.close()
+            return f"❌ Failed to create GIF: {str(gif_error)}\n\nThis might be due to MoviePy/FFmpeg compatibility issues."
         
         # Close clips to free resources
         clip.close()
         video.close()
         
         # Read GIF file
-        with open(gif_path, 'rb') as f:
-            gif_data = f.read()
-        
-        logger.info(f"[GIF GENERATOR] GIF created, size: {len(gif_data)} bytes")
+        logger.info(f"[GIF GENERATOR] Reading generated GIF file...")
+        try:
+            with open(gif_path, 'rb') as f:
+                gif_data = f.read()
+            
+            if not gif_data or len(gif_data) == 0:
+                logger.error(f"[GIF GENERATOR] Generated GIF is empty!")
+                return f"❌ Generated GIF file is empty. This might indicate an issue with MoviePy/FFmpeg."
+                
+            logger.info(f"[GIF GENERATOR] GIF created, size: {len(gif_data)} bytes ({len(gif_data)/(1024*1024):.2f} MB)")
+        except Exception as read_error:
+            logger.error(f"[GIF GENERATOR] Failed to read GIF file: {read_error}")
+            return f"❌ Failed to read generated GIF: {str(read_error)}"
         
         # Generate filename
         gif_filename = f"animated_{uuid.uuid4().hex[:8]}.gif"
+        logger.info(f"[GIF GENERATOR] Generated filename: {gif_filename}")
         
         # Save as artifact if tool_context is available
+        artifact_saved = False
         if tool_context:
-            from google.genai import types
-            inline_data = types.Blob(mime_type="image/gif", data=gif_data)
-            artifact_part = types.Part(inline_data=inline_data)
-            version = await tool_context.save_artifact(gif_filename, artifact_part)
-            logger.info(f"[GIF GENERATOR] Saved as artifact: {gif_filename} (version: {version})")
+            try:
+                from google.genai import types
+                inline_data = types.Blob(mime_type="image/gif", data=gif_data)
+                artifact_part = types.Part(inline_data=inline_data)
+                version = await tool_context.save_artifact(gif_filename, artifact_part)
+                logger.info(f"[GIF GENERATOR] Saved as artifact: {gif_filename} (version: {version})")
+                artifact_saved = True
+            except Exception as artifact_error:
+                logger.warning(f"[GIF GENERATOR] Failed to save artifact: {artifact_error}")
+                # Continue anyway - artifact saving is optional
+        else:
+            logger.warning(f"[GIF GENERATOR] tool_context not available, skipping artifact save")
         
         # Clean up temporary files
         import os as os_module
         try:
             os_module.unlink(video_path)
             os_module.unlink(gif_path)
-        except:
-            pass
+            logger.info(f"[GIF GENERATOR] Cleaned up temporary files")
+        except Exception as cleanup_error:
+            logger.warning(f"[GIF GENERATOR] Cleanup warning: {cleanup_error}")
         
         # Format size
         size_mb = len(gif_data) / (1024 * 1024)
         
-        return f"""✅ Successfully converted video to GIF!
+        # Build success message
+        success_msg = f"""✅ Successfully converted video to GIF!
 
 **Filename**: {gif_filename}
 **Size**: {size_mb:.2f} MB
@@ -1113,14 +1182,17 @@ async def convert_video_to_gif(
 **FPS**: {fps}
 **Dimensions**: {clip.w}x{clip.h}
 
-The animated GIF has been saved as an artifact and is ready to use!"""
+The animated GIF has been {"saved as an artifact and is" if artifact_saved else "created and is"} ready to use!"""
+        
+        logger.info(f"[GIF GENERATOR] Conversion completed successfully")
+        return success_msg
         
     except requests.exceptions.RequestException as e:
-        logger.error(f"[GIF GENERATOR] Error downloading video: {e}")
-        return f"❌ Error downloading video from URL: {str(e)}"
+        logger.error(f"[GIF GENERATOR] Network error downloading video: {e}", exc_info=True)
+        return f"❌ Network error downloading video from URL: {str(e)}\n\nPlease check:\n- The URL is accessible\n- The video file is not too large\n- Network connectivity"
     except Exception as e:
-        logger.error(f"[GIF GENERATOR] Error converting video to GIF: {e}", exc_info=True)
-        return f"❌ Error converting video to GIF: {str(e)}"
+        logger.error(f"[GIF GENERATOR] Unexpected error converting video to GIF: {e}", exc_info=True)
+        return f"❌ Error converting video to GIF: {str(e)}\n\nPlease check the video URL and try again. If the issue persists, the video format might not be supported."
 
 
 def get_github_token():
