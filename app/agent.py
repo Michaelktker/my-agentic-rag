@@ -523,13 +523,24 @@ User: "Create a small GIF from this video"
 - If video is too long, suggest extracting a shorter segment
 - If file size is too large, suggest optimization parameters
 
-## IMPORTANT EXECUTION NOTES:
-- The convert_video_to_gif tool is SYNCHRONOUS - it completes immediately
-- When the tool returns success, the GIF is DONE and saved as an artifact
-- Return the result to the user immediately - DO NOT tell them to "wait for it"
-- The GIF is ready the moment the tool completes successfully
+## CRITICAL EXECUTION RULES - READ CAREFULLY:
 
-Always execute the conversion and return the resulting GIF details to the user."""
+⚠️ **THIS IS NOT LIKE FAL.AI - NO WAITING, NO POLLING, NO PROCESSING TIME** ⚠️
+
+1. **SYNCHRONOUS OPERATION**: The convert_video_to_gif tool completes in ONE STEP
+2. **INSTANT RESULTS**: When the tool returns, the GIF is 100% DONE and saved
+3. **NEVER SAY "WAITING"**: Do NOT use phrases like:
+   - ❌ "I'm currently processing your request"
+   - ❌ "I'm waiting for the output"
+   - ❌ "Check back later"
+   - ❌ "I'll let you know when it's complete"
+4. **CORRECT RESPONSE**: When the tool succeeds, immediately tell the user:
+   - ✅ "Your GIF is ready! Here are the details: [show results]"
+   - ✅ "Successfully converted! The GIF is saved as [filename]"
+
+**Think of it like this**: It's like using a calculator - you get the answer INSTANTLY when you press "=". Same here - the tool returns the completed GIF immediately.
+
+Always execute the conversion and return the resulting GIF details to the user RIGHT AWAY.
 
 instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis, PLUS comprehensive AI content generation via fal.ai including images, videos, audio, and music.
 
@@ -707,16 +718,20 @@ When users provide Google Cloud Storage URLs (format: storage.googleapis.com wit
 2. **For videos**: Delegate to the fal_mcp_agent which will use polling agent
 3. **For audio/music**: Delegate to the fal_mcp_agent with appropriate audio generation models
 4. **For GIF conversion**: Delegate to gif_generator_agent_tool to convert video URLs to animated GIFs
-   - **CRITICAL**: GIF conversion is SYNCHRONOUS and completes immediately
-   - When gif_generator_agent_tool returns, the GIF is DONE - return the result to the user immediately
-   - DO NOT tell user to "wait for it" or "check back later" - the GIF is ready when the tool returns
+   - ⚠️ **CRITICAL DIFFERENCE FROM FAL.AI**: GIF conversion is SYNCHRONOUS (instant, no polling needed)
+   - When gif_generator_agent_tool returns, the GIF is 100% COMPLETE - it's not "processing", it's DONE
+   - **NEVER SAY**: "I'm currently processing", "I'm waiting for", "Check back later"
+   - **ALWAYS SAY**: "Your GIF is ready!" or "Successfully converted!" when the tool returns
+   - Think: Calculator analogy - you get the answer instantly, no waiting
 5. **For image-to-video**: Use `rename_and_save_media_artifact` first, then `make_artifact_public`, then delegate to fal_mcp_agent
 6. **For audio with reference**: Process uploaded audio files if needed before generation
 7. **Model Discovery**: Help users find available models for any media type if they ask "what models are available?"
 8. Always provide detailed, descriptive prompts for better results across all media types
 9. Handle errors gracefully and suggest alternative models if generation fails
-10. **For long-running operations (FAL.ai video/audio ONLY)**: Use polling - GIF conversion is NOT long-running
-11. **Users get automatic WhatsApp notifications** when FAL.ai content is ready with URLs
+10. **UNDERSTAND THE DIFFERENCE**:
+    - FAL.ai operations (video/audio): ASYNCHRONOUS - use polling, tell user "processing", send notifications later
+    - GIF conversion: SYNCHRONOUS - instant results, NO polling, NO "processing" messages
+11. **Users get automatic WhatsApp notifications** when FAL.ai content is ready with URLs (NOT for GIFs - GIFs are instant)
 
 
 
@@ -725,7 +740,7 @@ Use web search for current information not in your knowledge base.
 Use fal.ai agent for all AI content generation capabilities including images and videos.
 Use gif_generator_agent for converting video URLs to animated GIF files.
 
-Updated: Added GIF Generator agent for video-to-GIF conversion - 2025-11-10"""
+Updated: Fixed GIF Generator agent synchronous execution - clarified instant results (no polling/waiting) - 2025-11-10"""
 
 
 async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
