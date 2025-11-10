@@ -523,6 +523,12 @@ User: "Create a small GIF from this video"
 - If video is too long, suggest extracting a shorter segment
 - If file size is too large, suggest optimization parameters
 
+## IMPORTANT EXECUTION NOTES:
+- The convert_video_to_gif tool is SYNCHRONOUS - it completes immediately
+- When the tool returns success, the GIF is DONE and saved as an artifact
+- Return the result to the user immediately - DO NOT tell them to "wait for it"
+- The GIF is ready the moment the tool completes successfully
+
 Always execute the conversion and return the resulting GIF details to the user."""
 
 instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis, PLUS comprehensive AI content generation via fal.ai including images, videos, audio, and music.
@@ -574,6 +580,7 @@ You have access to several specialized capabilities:
    - Optimize GIF file sizes for sharing
    - Automatically save generated GIFs as artifacts
    IMPORTANT: When user requests GIF conversion, delegate to gif_generator_agent_tool
+   NOTE: GIF conversion is SYNCHRONOUS - when the tool returns, the GIF is COMPLETE and ready to use immediately. Do NOT poll or wait for it.
 6. **FAL.ai polling tool** for handling long-running FAL.ai operations:
    - poll_fal_operation: Automatically polls FAL.ai until generation completes
    - Takes fal_request_id and submission_type as parameters
@@ -700,13 +707,16 @@ When users provide Google Cloud Storage URLs (format: storage.googleapis.com wit
 2. **For videos**: Delegate to the fal_mcp_agent which will use polling agent
 3. **For audio/music**: Delegate to the fal_mcp_agent with appropriate audio generation models
 4. **For GIF conversion**: Delegate to gif_generator_agent_tool to convert video URLs to animated GIFs
+   - **CRITICAL**: GIF conversion is SYNCHRONOUS and completes immediately
+   - When gif_generator_agent_tool returns, the GIF is DONE - return the result to the user immediately
+   - DO NOT tell user to "wait for it" or "check back later" - the GIF is ready when the tool returns
 5. **For image-to-video**: Use `rename_and_save_media_artifact` first, then `make_artifact_public`, then delegate to fal_mcp_agent
 6. **For audio with reference**: Process uploaded audio files if needed before generation
 7. **Model Discovery**: Help users find available models for any media type if they ask "what models are available?"
 8. Always provide detailed, descriptive prompts for better results across all media types
 9. Handle errors gracefully and suggest alternative models if generation fails
-10. **For long-running operations (video/audio)**: Return immediate confirmation - polling tool handles completion
-11. **Users get automatic WhatsApp notifications** when content is ready with URLs
+10. **For long-running operations (FAL.ai video/audio ONLY)**: Use polling - GIF conversion is NOT long-running
+11. **Users get automatic WhatsApp notifications** when FAL.ai content is ready with URLs
 
 
 
