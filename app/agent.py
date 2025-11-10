@@ -476,6 +476,55 @@ DO NOT try to poll yourself - just return the information and let the parent age
 3. **RETURN POLLING INFO** - Don't poll, just pass the info back
 """
 
+# GIF Generator agent prompt
+GIF_GENERATOR_PROMPT = """You are a specialized GIF generator agent that converts short video clips into animated GIFs.
+
+## YOUR ROLE:
+Convert video URLs into optimized animated GIF files using MoviePy library.
+
+## CAPABILITIES:
+- Convert videos from HTTP/HTTPS URLs to GIF format
+- Extract specific time segments from videos
+- Control GIF quality (fps, dimensions)
+- Optimize file sizes for sharing
+
+## AVAILABLE TOOL:
+- convert_video_to_gif: Converts a video URL to an animated GIF
+
+## PARAMETERS YOU CAN CONTROL:
+1. **video_url** (required): The URL of the video to convert
+2. **start_time** (optional): Start time in seconds (default: 0)
+3. **duration** (optional): Length of clip in seconds (default: entire video)
+4. **fps** (optional): Frames per second (default: 10, lower = smaller file)
+5. **resize_width** (optional): Width in pixels (maintains aspect ratio)
+
+## USAGE EXAMPLES:
+
+**Basic conversion:**
+User: "Convert this video to GIF: https://example.com/video.mp4"
+→ Call convert_video_to_gif(video_url="https://example.com/video.mp4")
+
+**Extract specific segment:**
+User: "Make a GIF from 5 to 10 seconds of this video"
+→ Call convert_video_to_gif(video_url="...", start_time=5, duration=5)
+
+**Optimize size:**
+User: "Create a small GIF from this video"
+→ Call convert_video_to_gif(video_url="...", fps=8, resize_width=400)
+
+## BEST PRACTICES:
+- Keep GIFs short (3-10 seconds) for optimal file size
+- Use lower fps (8-12) for smaller files
+- Resize large videos to reduce file size
+- Suggest optimal parameters based on video length and quality needs
+
+## ERROR HANDLING:
+- If URL is invalid or inaccessible, explain the issue clearly
+- If video is too long, suggest extracting a shorter segment
+- If file size is too large, suggest optimization parameters
+
+Always execute the conversion and return the resulting GIF details to the user."""
+
 instruction = f"""You are an advanced AI assistant with multimodal capabilities, including image, audio, video, and document analysis, PLUS comprehensive AI content generation via fal.ai including images, videos, audio, and music.
 
 **PLATFORM CONTEXT - WhatsApp Chat Integration:**
@@ -519,12 +568,18 @@ You have access to several specialized capabilities:
    - Sound effect generation and audio processing
    - Model discovery and schema inspection for all media types
    - Both direct and queued generation for long-running tasks
-5. **FAL.ai polling tool** for handling long-running FAL.ai operations:
+5. **GIF Generator** through a specialized gif_generator_agent:
+   - Convert short video clips from URLs into animated GIFs
+   - Control clip duration, start time, fps, and dimensions
+   - Optimize GIF file sizes for sharing
+   - Automatically save generated GIFs as artifacts
+   IMPORTANT: When user requests GIF conversion, delegate to gif_generator_agent_tool
+6. **FAL.ai polling tool** for handling long-running FAL.ai operations:
    - poll_fal_operation: Automatically polls FAL.ai until generation completes
    - Takes fal_request_id and submission_type as parameters
    - Returns final media URLs when ready
    - Handles timeouts and errors gracefully
-6. **Artifact management** for handling media files uploaded by users:
+7. **Artifact management** for handling media files uploaded by users:
    - list_user_artifacts: See what media files users have uploaded
    - rename_and_save_media_artifact: Automatically rename images/videos with descriptive filenames
    - make_artifact_public: Make GCS artifacts publicly accessible for fal.ai processing
@@ -644,21 +699,23 @@ When users provide Google Cloud Storage URLs (format: storage.googleapis.com wit
 1. **For images**: Use the exact model the user specifies, or help them discover available models
 2. **For videos**: Delegate to the fal_mcp_agent which will use polling agent
 3. **For audio/music**: Delegate to the fal_mcp_agent with appropriate audio generation models
-4. **For image-to-video**: Use `rename_and_save_media_artifact` first, then `make_artifact_public`, then delegate to fal_mcp_agent
-5. **For audio with reference**: Process uploaded audio files if needed before generation
-6. **Model Discovery**: Help users find available models for any media type if they ask "what models are available?"
-7. Always provide detailed, descriptive prompts for better results across all media types
-8. Handle errors gracefully and suggest alternative models if generation fails
-9. **For long-running operations (video/audio)**: Return immediate confirmation - polling tool handles completion
-10. **Users get automatic WhatsApp notifications** when content is ready with URLs
+4. **For GIF conversion**: Delegate to gif_generator_agent_tool to convert video URLs to animated GIFs
+5. **For image-to-video**: Use `rename_and_save_media_artifact` first, then `make_artifact_public`, then delegate to fal_mcp_agent
+6. **For audio with reference**: Process uploaded audio files if needed before generation
+7. **Model Discovery**: Help users find available models for any media type if they ask "what models are available?"
+8. Always provide detailed, descriptive prompts for better results across all media types
+9. Handle errors gracefully and suggest alternative models if generation fails
+10. **For long-running operations (video/audio)**: Return immediate confirmation - polling tool handles completion
+11. **Users get automatic WhatsApp notifications** when content is ready with URLs
 
 
 
 GitHub agent works with repository: Michaelktker/my-agentic-rag by default.
 Use web search for current information not in your knowledge base.
 Use fal.ai agent for all AI content generation capabilities including images and videos.
+Use gif_generator_agent for converting video URLs to animated GIF files.
 
-Updated: Comprehensive fal.ai integration for images, videos, audio, and music generation - 2025-10-28"""
+Updated: Added GIF Generator agent for video-to-GIF conversion - 2025-11-10"""
 
 
 async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
@@ -926,6 +983,121 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
         return f"Error making artifact '{filename}' public: {e}"
 
 
+async def convert_video_to_gif(
+    video_url: str,
+    start_time: float = 0,
+    duration: Optional[float] = None,
+    fps: int = 10,
+    resize_width: Optional[int] = None,
+    tool_context: ToolContext = None
+) -> str:
+    """
+    Convert a video URL to an animated GIF using MoviePy.
+    
+    Args:
+        video_url (str): URL of the video to convert (supports HTTP/HTTPS URLs)
+        start_time (float): Start time in seconds (default: 0)
+        duration (float): Duration of the clip in seconds (default: entire video)
+        fps (int): Frames per second for the GIF (default: 10, lower = smaller file)
+        resize_width (int): Width to resize the GIF (maintains aspect ratio, default: original size)
+        tool_context (ToolContext): Context for saving artifacts
+        
+    Returns:
+        str: Success message with GIF details or error message
+    """
+    try:
+        from moviepy.editor import VideoFileClip
+        import tempfile
+        import requests
+        
+        logger.info(f"[GIF GENERATOR] Starting conversion for URL: {video_url}")
+        
+        # Download video to temporary file
+        logger.info(f"[GIF GENERATOR] Downloading video from URL...")
+        response = requests.get(video_url, stream=True, timeout=30)
+        response.raise_for_status()
+        
+        # Create temporary files for video and GIF
+        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_video:
+            video_path = temp_video.name
+            for chunk in response.iter_content(chunk_size=8192):
+                temp_video.write(chunk)
+        
+        logger.info(f"[GIF GENERATOR] Video downloaded to: {video_path}")
+        
+        # Load video clip
+        logger.info(f"[GIF GENERATOR] Loading video clip...")
+        video = VideoFileClip(video_path)
+        
+        # Calculate end time
+        end_time = start_time + duration if duration else video.duration
+        
+        # Extract subclip
+        logger.info(f"[GIF GENERATOR] Extracting clip from {start_time}s to {end_time}s")
+        clip = video.subclip(start_time, end_time)
+        
+        # Resize if requested
+        if resize_width:
+            logger.info(f"[GIF GENERATOR] Resizing to width: {resize_width}px")
+            clip = clip.resize(width=resize_width)
+        
+        # Create GIF in temporary file
+        with tempfile.NamedTemporaryFile(suffix='.gif', delete=False) as temp_gif:
+            gif_path = temp_gif.name
+        
+        logger.info(f"[GIF GENERATOR] Creating GIF with {fps} fps...")
+        clip.write_gif(gif_path, fps=fps)
+        
+        # Close clips to free resources
+        clip.close()
+        video.close()
+        
+        # Read GIF file
+        with open(gif_path, 'rb') as f:
+            gif_data = f.read()
+        
+        logger.info(f"[GIF GENERATOR] GIF created, size: {len(gif_data)} bytes")
+        
+        # Generate filename
+        gif_filename = f"animated_{uuid.uuid4().hex[:8]}.gif"
+        
+        # Save as artifact if tool_context is available
+        if tool_context:
+            from google.genai import types
+            inline_data = types.Blob(mime_type="image/gif", data=gif_data)
+            artifact_part = types.Part(inline_data=inline_data)
+            version = await tool_context.save_artifact(gif_filename, artifact_part)
+            logger.info(f"[GIF GENERATOR] Saved as artifact: {gif_filename} (version: {version})")
+        
+        # Clean up temporary files
+        import os as os_module
+        try:
+            os_module.unlink(video_path)
+            os_module.unlink(gif_path)
+        except:
+            pass
+        
+        # Format size
+        size_mb = len(gif_data) / (1024 * 1024)
+        
+        return f"""✅ Successfully converted video to GIF!
+
+**Filename**: {gif_filename}
+**Size**: {size_mb:.2f} MB
+**Duration**: {end_time - start_time:.1f} seconds
+**FPS**: {fps}
+**Dimensions**: {clip.w}x{clip.h}
+
+The animated GIF has been saved as an artifact and is ready to use!"""
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"[GIF GENERATOR] Error downloading video: {e}")
+        return f"❌ Error downloading video from URL: {str(e)}"
+    except Exception as e:
+        logger.error(f"[GIF GENERATOR] Error converting video to GIF: {e}", exc_info=True)
+        return f"❌ Error converting video to GIF: {str(e)}"
+
+
 def get_github_token():
     """Get GitHub token from environment or Secret Manager"""
     # First try environment variable (matches Terraform GITHUB_PAT)
@@ -1096,6 +1268,20 @@ websearch_agent = Agent(
 # Create AgentTool from the web search agent
 websearch_tool = AgentTool(agent=websearch_agent)
 
+# Create GIF generator function tool
+gif_generator_tool = FunctionTool(func=convert_video_to_gif)
+
+# Create the GIF generator agent
+gif_generator_agent = Agent(
+    model="gemini-2.5-flash",
+    name="gif_generator_agent",
+    instruction=GIF_GENERATOR_PROMPT,
+    tools=[gif_generator_tool],
+)
+
+# Create AgentTool from the GIF generator agent
+gif_generator_agent_tool = AgentTool(agent=gif_generator_agent)
+
 # Create artifact management tools
 list_artifacts_tool = FunctionTool(func=list_user_artifacts)
 save_inline_media_tool = FunctionTool(func=save_inline_media_as_artifact)
@@ -1190,7 +1376,7 @@ async def after_agent_callback(callback_context: CallbackContext) -> None:
         print(f"[MENTION CHECK] Error in after_agent_callback: {e}")
 
 
-tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, list_artifacts_tool, save_inline_media_tool, rename_media_artifact_tool, make_public_tool, poll_fal_tool]
+tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, gif_generator_agent_tool, list_artifacts_tool, save_inline_media_tool, rename_media_artifact_tool, make_public_tool, poll_fal_tool]
 
 root_agent = Agent(
     name="root_agent",
