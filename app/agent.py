@@ -623,7 +623,7 @@ You have access to several specialized capabilities:
    - Sound effect generation and audio processing
    - Model discovery and schema inspection for all media types
    - Both direct and queued generation for long-running tasks
-5. **GIF Generator** through a specialized gif_generator_agent_tool:
+5. **GIF Generator** through a specialized gif_generator_agent:
    - Convert short video clips from URLs into animated GIFs
    - Control clip duration, start time, fps, and dimensions
    - Optimize GIF file sizes for sharing
@@ -631,7 +631,7 @@ You have access to several specialized capabilities:
    
    **CRITICAL GIF WORKFLOW - MUST FOLLOW:**
    When user mentions "GIF", "gif", "animated gif", or "convert to GIF":
-   1. **IMMEDIATELY call gif_generator_agent_tool** - do NOT respond with text first
+   1. **IMMEDIATELY call gif_generator_agent** - do NOT respond with text first
    2. **Pass the video URL** from the user's message to the tool
    3. **Wait for tool response** - the GIF conversion completes synchronously (no polling)
    4. **Return the tool's response** directly to the user
@@ -643,10 +643,10 @@ You have access to several specialized capabilities:
    
    **CORRECT BEHAVIOR - ALWAYS DO THIS:**
    ✅ User: "use the gif generator convert this into a animated gif https://example.com/video.mp4"
-   ✅ You MUST: Call gif_generator_agent_tool(video_url="https://example.com/video.mp4")
+   ✅ You MUST: Call gif_generator_agent(video_url="https://example.com/video.mp4")
    ✅ Return tool's response verbatim
    
-   **RULE: If message contains "gif" or "GIF", you MUST call gif_generator_agent_tool. TEXT RESPONSES ARE FORBIDDEN.**
+   **RULE: If message contains "gif" or "GIF", you MUST call gif_generator_agent. TEXT RESPONSES ARE FORBIDDEN.**
    
    NOTE: GIF conversion is SYNCHRONOUS - when the tool returns, the GIF is COMPLETE. Do NOT poll or wait.
 6. **FAL.ai polling tool** for handling long-running FAL.ai operations:
@@ -778,12 +778,12 @@ When users provide Google Cloud Storage URLs (format: storage.googleapis.com wit
    
    **MANDATORY WORKFLOW - DO NOT DEVIATE:**
    a. **Extract video URL** from user's message
-   b. **IMMEDIATELY call gif_generator_agent_tool** with the video URL - NO TEXT RESPONSE FIRST
+   b. **IMMEDIATELY call gif_generator_agent** with the video URL - NO TEXT RESPONSE FIRST
    c. **Return tool output verbatim** to the user
    
    **CRITICAL RULES:**
    - ⚠️ GIF conversion is SYNCHRONOUS (instant, completes in one call, no polling)
-   - When gif_generator_agent_tool returns, the GIF is 100% COMPLETE
+   - When gif_generator_agent returns, the GIF is 100% COMPLETE
    - **NEVER RESPOND WITH TEXT BEFORE CALLING THE TOOL**
    - **DO NOT SAY**: "I'm attempting...", "I'm processing...", "Let me convert...", "I'm waiting for..."
    - **JUST CALL THE TOOL** - it returns immediately with the complete result
@@ -1493,7 +1493,7 @@ async def before_agent_callback(callback_context: CallbackContext) -> None:
                     print(f"[GIF DEBUG] Available tools: {len(tools)} tools registered")
                     tool_names = [getattr(t, 'name', str(type(t).__name__)) for t in tools]
                     print(f"[GIF DEBUG] Tool names: {tool_names}")
-                    print(f"[GIF DEBUG] gif_generator_agent_tool present: {'gif_generator_agent_tool' in tool_names}")
+                    print(f"[GIF DEBUG] gif_generator_agent present: {'gif_generator_agent' in tool_names}")
                 
     except Exception as e:
         print(f"[MENTION CHECK] Error in before_agent_callback: {e}")
