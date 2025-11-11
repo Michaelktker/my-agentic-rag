@@ -1101,7 +1101,8 @@ async def convert_video_to_gif(
     try:
         # Import check with better error message
         try:
-            from moviepy.editor import VideoFileClip
+            # MoviePy v2.0 changed import path from moviepy.editor to moviepy
+            from moviepy import VideoFileClip
         except ImportError as import_error:
             logger.error(f"[GIF GENERATOR] MoviePy import failed: {import_error}")
             return f"❌ MoviePy library not available: {str(import_error)}\n\nPlease ensure moviepy is installed in the deployment environment."
