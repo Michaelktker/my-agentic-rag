@@ -1078,7 +1078,7 @@ async def make_artifact_public(filename: str, tool_context: ToolContext) -> str:
 
 async def convert_video_to_gif(
     video_url: str,
-    start_time: float = 0,
+    start_time: float = 0.0,
     duration: Optional[float] = None,
     fps: int = 10,
     resize_width: Optional[int] = None,
@@ -1089,7 +1089,7 @@ async def convert_video_to_gif(
     
     Args:
         video_url (str): URL of the video to convert (supports HTTP/HTTPS URLs)
-        start_time (float): Start time in seconds (default: 0)
+        start_time (float): Start time in seconds (default: 0.0)
         duration (float): Duration of the clip in seconds (default: entire video)
         fps (int): Frames per second for the GIF (default: 10, lower = smaller file)
         resize_width (int): Width to resize the GIF (maintains aspect ratio, default: original size)
