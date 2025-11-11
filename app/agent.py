@@ -636,11 +636,17 @@ You have access to several specialized capabilities:
    3. **Wait for tool response** - the GIF conversion completes synchronously (no polling)
    4. **Return the tool's response** directly to the user
    
-   Example:
-   User: "convert this video to GIF https://example.com/video.mp4"
-   → YOU MUST CALL: gif_generator_agent_tool with the URL
-   → DO NOT SAY: "I'm attempting..." or "Let me convert..."
-   → JUST CALL THE TOOL and return its response
+   **WRONG BEHAVIOR - NEVER DO THIS:**
+   ❌ User: "use the gif generator convert this into a animated gif https://example.com/video.mp4"
+   ❌ You respond: "I'm re-attempting the GIF conversion..." ← NO! This doesn't convert anything!
+   ❌ You respond: "Let me convert that for you..." ← NO! This doesn't convert anything!
+   
+   **CORRECT BEHAVIOR - ALWAYS DO THIS:**
+   ✅ User: "use the gif generator convert this into a animated gif https://example.com/video.mp4"
+   ✅ You MUST: Call gif_generator_agent_tool(video_url="https://example.com/video.mp4")
+   ✅ Return tool's response verbatim
+   
+   **RULE: If message contains "gif" or "GIF", you MUST call gif_generator_agent_tool. TEXT RESPONSES ARE FORBIDDEN.**
    
    NOTE: GIF conversion is SYNCHRONOUS - when the tool returns, the GIF is COMPLETE. Do NOT poll or wait.
 6. **FAL.ai polling tool** for handling long-running FAL.ai operations:
@@ -1481,6 +1487,11 @@ async def before_agent_callback(callback_context: CallbackContext) -> None:
                 callback_context._invocation_context.end_invocation = True
             else:
                 print("[MENTION CHECK] Valid mention found - proceeding with agent")
+                # Debug: log if this is a GIF request
+                if "gif" in message_text.lower():
+                    print(f"[GIF DEBUG] Detected GIF request. Message: {message_text}")
+                    print(f"[GIF DEBUG] Available tools: {len(tools)} tools registered")
+                    print(f"[GIF DEBUG] gif_generator_agent_tool present: {'gif_generator_agent_tool' in [getattr(t, 'name', str(t)) for t in tools]}")
                 
     except Exception as e:
         print(f"[MENTION CHECK] Error in before_agent_callback: {e}")
@@ -1497,6 +1508,15 @@ async def after_agent_callback(callback_context: CallbackContext) -> None:
         # Log tool usage for debugging
         if tool_name:
             logger.info(f"[ROOT AGENT] Tool called: {tool_name}")
+        else:
+            # Log when no tool was called - this is the problem we're debugging
+            print(f"[GIF DEBUG] No tool was called! Agent completed without using tools.")
+            # Try to get the agent's response
+            if hasattr(callback_context, '_invocation_context'):
+                inv_ctx = callback_context._invocation_context
+                if hasattr(inv_ctx, 'response') and inv_ctx.response:
+                    response_text = str(inv_ctx.response)[:200]
+                    print(f"[GIF DEBUG] Agent response preview: {response_text}")
         
         # Debug: log what we're getting
         print(f"[CALLBACK DEBUG] Tool name: {tool_name}, Result type: {type(result)}")
