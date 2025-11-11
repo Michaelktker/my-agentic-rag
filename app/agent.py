@@ -1491,7 +1491,9 @@ async def before_agent_callback(callback_context: CallbackContext) -> None:
                 if "gif" in message_text.lower():
                     print(f"[GIF DEBUG] Detected GIF request. Message: {message_text}")
                     print(f"[GIF DEBUG] Available tools: {len(tools)} tools registered")
-                    print(f"[GIF DEBUG] gif_generator_agent_tool present: {'gif_generator_agent_tool' in [getattr(t, 'name', str(t)) for t in tools]}")
+                    tool_names = [getattr(t, 'name', str(type(t).__name__)) for t in tools]
+                    print(f"[GIF DEBUG] Tool names: {tool_names}")
+                    print(f"[GIF DEBUG] gif_generator_agent_tool present: {'gif_generator_agent_tool' in tool_names}")
                 
     except Exception as e:
         print(f"[MENTION CHECK] Error in before_agent_callback: {e}")
