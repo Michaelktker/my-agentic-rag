@@ -1161,7 +1161,8 @@ async def convert_video_to_gif(
         # Extract subclip
         logger.info(f"[GIF GENERATOR] Extracting clip from {start_time}s to {end_time}s")
         try:
-            clip = video.subclip(start_time, end_time)
+            # MoviePy v2.0 uses subclipped() instead of subclip()
+            clip = video.subclipped(start_time, end_time)
             logger.info(f"[GIF GENERATOR] Clip extracted successfully")
         except Exception as clip_error:
             logger.error(f"[GIF GENERATOR] Failed to extract clip: {clip_error}")
@@ -1172,7 +1173,8 @@ async def convert_video_to_gif(
         if resize_width:
             logger.info(f"[GIF GENERATOR] Resizing to width: {resize_width}px")
             try:
-                clip = clip.resize(width=resize_width)
+                # MoviePy v2.0 uses resized() instead of resize()
+                clip = clip.resized(width=resize_width)
                 logger.info(f"[GIF GENERATOR] Resized to: {clip.w}x{clip.h}")
             except Exception as resize_error:
                 logger.warning(f"[GIF GENERATOR] Resize failed: {resize_error}, continuing with original size")
