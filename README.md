@@ -92,10 +92,12 @@ A production-ready system that combines:
 ### Key Features (October 2025)
 
 #### **🎬 GIF Generation Enhancement** (November 2025)
-- **Synchronous Execution**: GIF conversion now properly recognized as immediate/synchronous operation
-- **Clear User Experience**: No more confusing "wait for it" messages when GIF is already complete
-- **Agent Clarity**: Enhanced prompts distinguish between synchronous GIF conversion and asynchronous FAL.ai operations
-- **Immediate Results**: Users get instant confirmation when GIF conversion completes
+- **MoviePy v2.0 Integration**: Video-to-GIF conversion using modern MoviePy API
+- **Direct Tool Calling**: Simplified from two-layer hierarchy (FunctionTool → Agent → AgentTool) to direct FunctionTool
+- **API Compatibility**: Fixed for MoviePy v2.0 breaking changes (`subclipped()`, `resized()`, direct import from `moviepy`)
+- **ADK Type Safety**: Proper float literals (`0.0` vs `0`) for parameter defaults
+- **Synchronous Execution**: GIF conversion properly recognized as immediate operation (no polling needed)
+- **Error Handling**: Comprehensive logging and graceful fallbacks for MoviePy/FFmpeg issues
 
 #### **🖥️ Cloud Terminal Integration** (November 2025)
 - **Secure Terminal Access**: Execute cloud commands directly from WhatsApp
@@ -300,6 +302,87 @@ We've resolved critical deployment issues that were preventing production deploy
 - **Impact**: Cloud Run service now successfully loads and runs the agent
 - **Deployment**: Both staging and production environments deployed successfully
 - **Status**: ✅ WhatsApp bot now communicating properly with Cloud Run endpoint
+
+### November 2025 GIF Generator Debugging & MoviePy v2.0 Migration
+Comprehensive debugging process to fix GIF generation functionality:
+
+#### 🐛 **Issue Discovery (November 11, 2025)**
+- **Problem**: GIF generator agent not producing GIF outputs
+- **Symptom**: Agent responding with text ("I'm re-attempting...") instead of calling conversion tool
+- **Initial Investigation**: Cloud Run and Compute Engine logs showed tool registration but no execution
+
+#### 🔍 **Root Cause Analysis**
+Multiple layers of issues discovered through systematic debugging:
+
+1. **Tool Hierarchy Complexity**
+   - **Issue**: Two-layer hierarchy (FunctionTool → Agent → AgentTool) confusing LLM
+   - **Evidence**: Logs showed `gif_generator_agent present: True` but `Tool name: None`
+   - **Behavior**: Gemini 2.5 Flash choosing text responses over tool calls
+
+2. **Tool Name Mismatch**
+   - **Issue**: Instructions referenced `gif_generator_agent_tool` but registered as `gif_generator_agent`
+   - **Discovery**: AgentTool uses underlying agent's `name` attribute, not Python variable name
+   - **Impact**: Tool available but unreachable due to naming inconsistency
+
+3. **ADK Parameter Type Validation**
+   - **Issue**: ADK rejecting `start_time: float = 0` (integer 0 for float type)
+   - **Error**: `ValueError: Default value 0 of parameter start_time: float = 0 of function convert_video_to_gif is not compatible`
+   - **Solution**: Changed to `start_time: float = 0.0` (proper float literal)
+
+4. **MoviePy v2.0 Breaking Changes**
+   - **Issue**: Import path and method names changed in MoviePy v2.0
+   - **Errors**:
+     - Import: `No module named 'moviepy.editor'`
+     - Method: `'VideoFileClip' object has no attribute 'subclip'`
+     - Method: `'VideoClip' object has no attribute 'resize'`
+
+#### ✅ **Solutions Implemented**
+
+1. **Simplified Tool Architecture**
+   - **Change**: Removed intermediate agent layer
+   - **Before**: `gif_generator_tool` (FunctionTool) → `gif_generator_agent` (Agent) → `gif_generator_agent_tool` (AgentTool)
+   - **After**: `gif_generator_tool` (FunctionTool) directly in root agent's tools list
+   - **Benefit**: Direct tool access, clearer for LLM to recognize and call
+
+2. **MoviePy v2.0 API Migration**
+   - **Import**: `from moviepy.editor import VideoFileClip` → `from moviepy import VideoFileClip`
+   - **Methods**: 
+     - `clip.subclip(start, end)` → `clip.subclipped(start, end)`
+     - `clip.resize(width=X)` → `clip.resized(width=X)`
+   - **Documentation**: Referenced Context7 and MoviePy GitHub for accurate v2.0 API
+
+3. **Type Safety Fixes**
+   - **Parameter**: `start_time: float = 0.0` (not `0`)
+   - **Validation**: ADK now accepts float default value correctly
+
+4. **Enhanced Debugging**
+   - **Logging**: Added comprehensive debug statements for tool presence and calling
+   - **Monitoring**: `[GIF DEBUG]` and `[CALLBACK DEBUG]` markers in logs
+   - **Verification**: Tool registration and execution tracking
+
+#### 📊 **Deployment History**
+- **Revision 00181-rs8**: Initial prompt fixes
+- **Revision 00183-8ps**: Tool name corrections
+- **Revision 00185-hxd**: Additional debugging
+- **Revision 00187-j2c**: Hierarchy simplification attempt
+- **Revision 00189-j9c**: Float literal fix (resolved crash)
+- **Revision 00191-8mh**: MoviePy import path fix
+- **Revision 00193-mg4**: Additional v2.0 compatibility
+- **Revision 00195-fqp**: Complete v2.0 API migration ✅
+
+#### 🎯 **Result**
+- ✅ GIF generator tool now properly called by agent
+- ✅ MoviePy v2.0 compatibility fully implemented
+- ✅ Video-to-GIF conversion working end-to-end
+- ✅ Comprehensive error handling for MoviePy/FFmpeg issues
+- ✅ Clean artifact management via ADK tool_context
+
+#### 📚 **Lessons Learned**
+- **Tool Hierarchy**: Simpler is better - direct FunctionTool preferred over nested AgentTool
+- **LLM Behavior**: Explicit instructions don't guarantee tool usage; architecture matters
+- **Type Systems**: ADK strictly validates parameter types and default values
+- **Library Migrations**: Breaking changes require thorough API documentation review
+- **Debug Logging**: Essential for understanding LLM tool-calling decisions
 
 ### November 2025 Cloud SQL Connection Stability Fixes
 Critical infrastructure improvements to resolve database connection failures:

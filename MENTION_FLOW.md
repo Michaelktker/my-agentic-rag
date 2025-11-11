@@ -327,3 +327,177 @@ curl -X POST https://your-service.run.app/chat \
 
 # Expected: "I only respond when mentioned with @Myker..."
 ```
+
+---
+
+## Pattern 3: GIF Generator Tool Flow (November 2025)
+
+**New Feature**: Video-to-GIF conversion using MoviePy v2.0
+
+### GIF Generator Architecture
+
+**Location**: `app/agent.py` → `convert_video_to_gif()` function
+
+The GIF generator uses a **direct FunctionTool** pattern for synchronous video conversion:
+
+```python
+gif_generator_tool = FunctionTool(
+    function=convert_video_to_gif,
+    name="convert_video_to_gif",
+    description="Convert video URLs to animated GIFs using MoviePy..."
+)
+
+# Added directly to root agent's tools list
+tools = [
+    ...,
+    gif_generator_tool,  # Direct function tool (not nested in AgentTool)
+    ...
+]
+```
+
+### Tool Calling Flow
+
+```
+User Message: "@myker convert this video to gif [VIDEO_URL]"
+    ↓
+index.js: Detect @myker mention → Forward to ADK
+    ↓
+ADK Agent: Parse intent → Identify GIF conversion request
+    ↓
+Tool Selection: convert_video_to_gif (direct FunctionTool)
+    ↓
+convert_video_to_gif(video_url, start_time=0.0, duration=None, fps=10, resize_width=None)
+    ↓
+MoviePy v2.0 Processing:
+    1. Download video from URL → temp file
+    2. Load with VideoFileClip(temp_path)
+    3. Extract subclip: clip.subclipped(start_time, end_time)
+    4. Resize (optional): clip.resized(width=resize_width)
+    5. Generate GIF: clip.write_gif(gif_path, fps=fps)
+    6. Save to GCS: tool_context.save_artifact(filename, gif_blob)
+    7. Make public: make_artifact_public(filename)
+    ↓
+Return: Success message with GIF details and public URL
+    ↓
+ADK Response → WhatsApp Bot → User receives GIF + URL
+```
+
+### MoviePy v2.0 API Changes
+
+| MoviePy v1.x | MoviePy v2.0 | Notes |
+|--------------|--------------|-------|
+| `from moviepy.editor import VideoFileClip` | `from moviepy import VideoFileClip` | Direct import |
+| `clip.subclip(start, end)` | `clip.subclipped(start, end)` | Past tense |
+| `clip.resize(width=X)` | `clip.resized(width=X)` | Past tense |
+| `clip.write_gif(path, fps=10)` | Same | No change |
+
+### Architecture Evolution
+
+**Problem**: Two-layer hierarchy was confusing the LLM:
+```python
+# ❌ BEFORE: Nested structure
+gif_generator_tool = FunctionTool(function=convert_video_to_gif)
+gif_generator_agent = Agent(tools=[gif_generator_tool])
+gif_generator_agent_tool = AgentTool(agent=gif_generator_agent)
+tools = [..., gif_generator_agent_tool]  # LLM couldn't find it
+```
+
+**Solution**: Direct FunctionTool:
+```python
+# ✅ AFTER: Direct access
+gif_generator_tool = FunctionTool(function=convert_video_to_gif)
+tools = [..., gif_generator_tool]  # LLM easily recognizes it
+```
+
+### Key Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `video_url` | str | Required | HTTP/HTTPS URL of video to convert |
+| `start_time` | float | 0.0 | Start time in seconds (must use float literal!) |
+| `duration` | Optional[float] | None | Duration in seconds (None = entire video) |
+| `fps` | int | 10 | Frames per second (lower = smaller file) |
+| `resize_width` | Optional[int] | None | Width in pixels (maintains aspect ratio) |
+| `tool_context` | ToolContext | None | ADK context for artifact saving |
+
+**Critical**: Use `0.0` not `0` for float defaults - ADK validates strictly!
+
+### Error Handling
+
+```python
+# Import validation
+try:
+    from moviepy import VideoFileClip
+except ImportError as import_error:
+    return f"❌ MoviePy library not available: {str(import_error)}"
+
+# Video loading
+try:
+    video = VideoFileClip(video_path)
+except Exception as video_error:
+    return f"❌ Failed to load video file: {str(video_error)}"
+
+# Clip extraction
+try:
+    clip = video.subclipped(start_time, end_time)
+except Exception as clip_error:
+    return f"❌ Failed to extract clip: {str(clip_error)}"
+
+# GIF creation
+try:
+    clip.write_gif(gif_path, fps=fps, logger=None)
+except Exception as gif_error:
+    return f"❌ Failed to create GIF: {str(gif_error)}"
+```
+
+### Debugging Tools
+
+The GIF generator includes comprehensive logging:
+
+```python
+logger.info(f"[GIF GENERATOR] Starting conversion for URL: {video_url}")
+logger.info(f"[GIF GENERATOR] Parameters: start_time={start_time}, duration={duration}, fps={fps}")
+logger.info(f"[GIF GENERATOR] Video loaded: duration={video.duration}s, size={video.size}")
+logger.info(f"[GIF GENERATOR] Clip extracted successfully")
+logger.info(f"[GIF GENERATOR] GIF created, size: {len(gif_data)} bytes")
+```
+
+Cloud Run logs show:
+```
+[GIF DEBUG] Detected GIF request. Message: ...
+[GIF DEBUG] Available tools: 10 tools registered
+[GIF DEBUG] Tool names: [...'convert_video_to_gif'...]
+[GIF DEBUG] convert_video_to_gif present: True
+[CALLBACK DEBUG] Tool name: convert_video_to_gif  ✅ Success!
+```
+
+### Dependencies
+
+**Required**:
+- `moviepy>=2.0.0`: Video processing
+- `imageio-ffmpeg>=0.2.0`: FFmpeg wrapper
+- `requests`: Video download
+- `google-adk~=1.14.0`: ADK framework
+
+**Runtime**:
+- FFmpeg binary (included via `imageio-ffmpeg`)
+- Temporary storage for video/GIF files
+- GCS access for artifact storage
+
+### Usage Examples
+
+```python
+# Basic: Convert entire video
+"@myker convert this to gif https://example.com/video.mp4"
+
+# With timing: Convert 5-second segment
+"@myker convert this to gif from 10s to 15s https://example.com/video.mp4"
+
+# With quality: Lower FPS for smaller file
+"@myker convert this to gif at 5 fps https://example.com/video.mp4"
+
+# With resize: Reduce width
+"@myker convert this to gif, resize to 320px wide https://example.com/video.mp4"
+```
+
+---
