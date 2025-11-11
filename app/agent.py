@@ -623,7 +623,7 @@ You have access to several specialized capabilities:
    - Sound effect generation and audio processing
    - Model discovery and schema inspection for all media types
    - Both direct and queued generation for long-running tasks
-5. **GIF Generator** through a specialized gif_generator_agent:
+5. **GIF Generator** through convert_video_to_gif tool:
    - Convert short video clips from URLs into animated GIFs
    - Control clip duration, start time, fps, and dimensions
    - Optimize GIF file sizes for sharing
@@ -631,7 +631,7 @@ You have access to several specialized capabilities:
    
    **CRITICAL GIF WORKFLOW - MUST FOLLOW:**
    When user mentions "GIF", "gif", "animated gif", or "convert to GIF":
-   1. **IMMEDIATELY call gif_generator_agent** - do NOT respond with text first
+   1. **IMMEDIATELY call convert_video_to_gif** - do NOT respond with text first
    2. **Pass the video URL** from the user's message to the tool
    3. **Wait for tool response** - the GIF conversion completes synchronously (no polling)
    4. **Return the tool's response** directly to the user
@@ -643,10 +643,10 @@ You have access to several specialized capabilities:
    
    **CORRECT BEHAVIOR - ALWAYS DO THIS:**
    ✅ User: "use the gif generator convert this into a animated gif https://example.com/video.mp4"
-   ✅ You MUST: Call gif_generator_agent(video_url="https://example.com/video.mp4")
+   ✅ You MUST: Call convert_video_to_gif(video_url="https://example.com/video.mp4")
    ✅ Return tool's response verbatim
    
-   **RULE: If message contains "gif" or "GIF", you MUST call gif_generator_agent. TEXT RESPONSES ARE FORBIDDEN.**
+   **RULE: If message contains "gif" or "GIF", you MUST call convert_video_to_gif. TEXT RESPONSES ARE FORBIDDEN.**
    
    NOTE: GIF conversion is SYNCHRONOUS - when the tool returns, the GIF is COMPLETE. Do NOT poll or wait.
 6. **FAL.ai polling tool** for handling long-running FAL.ai operations:
@@ -778,12 +778,12 @@ When users provide Google Cloud Storage URLs (format: storage.googleapis.com wit
    
    **MANDATORY WORKFLOW - DO NOT DEVIATE:**
    a. **Extract video URL** from user's message
-   b. **IMMEDIATELY call gif_generator_agent** with the video URL - NO TEXT RESPONSE FIRST
+   b. **IMMEDIATELY call convert_video_to_gif** with the video URL - NO TEXT RESPONSE FIRST
    c. **Return tool output verbatim** to the user
    
    **CRITICAL RULES:**
    - ⚠️ GIF conversion is SYNCHRONOUS (instant, completes in one call, no polling)
-   - When gif_generator_agent returns, the GIF is 100% COMPLETE
+   - When convert_video_to_gif returns, the GIF is 100% COMPLETE
    - **NEVER RESPOND WITH TEXT BEFORE CALLING THE TOOL**
    - **DO NOT SAY**: "I'm attempting...", "I'm processing...", "Let me convert...", "I'm waiting for..."
    - **JUST CALL THE TOOL** - it returns immediately with the complete result
@@ -1435,19 +1435,9 @@ websearch_agent = Agent(
 # Create AgentTool from the web search agent
 websearch_tool = AgentTool(agent=websearch_agent)
 
-# Create GIF generator function tool
+# Create GIF generator function tool DIRECTLY (skip the sub-agent wrapper for now)
+# This makes it a direct function call instead of delegating to a sub-agent
 gif_generator_tool = FunctionTool(func=convert_video_to_gif)
-
-# Create the GIF generator agent
-gif_generator_agent = Agent(
-    model="gemini-2.5-flash",
-    name="gif_generator_agent",
-    instruction=GIF_GENERATOR_PROMPT,
-    tools=[gif_generator_tool],
-)
-
-# Create AgentTool from the GIF generator agent
-gif_generator_agent_tool = AgentTool(agent=gif_generator_agent)
 
 # Create artifact management tools
 list_artifacts_tool = FunctionTool(func=list_user_artifacts)
@@ -1493,7 +1483,7 @@ async def before_agent_callback(callback_context: CallbackContext) -> None:
                     print(f"[GIF DEBUG] Available tools: {len(tools)} tools registered")
                     tool_names = [getattr(t, 'name', str(type(t).__name__)) for t in tools]
                     print(f"[GIF DEBUG] Tool names: {tool_names}")
-                    print(f"[GIF DEBUG] gif_generator_agent present: {'gif_generator_agent' in tool_names}")
+                    print(f"[GIF DEBUG] convert_video_to_gif present: {'convert_video_to_gif' in tool_names}")
                 
     except Exception as e:
         print(f"[MENTION CHECK] Error in before_agent_callback: {e}")
@@ -1559,7 +1549,7 @@ async def after_agent_callback(callback_context: CallbackContext) -> None:
         print(f"[MENTION CHECK] Error in after_agent_callback: {e}")
 
 
-tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, gif_generator_agent_tool, list_artifacts_tool, save_inline_media_tool, rename_media_artifact_tool, make_public_tool, poll_fal_tool]
+tools = [retrieve_docs, github_mcp_tool, fal_mcp_tool, websearch_tool, gif_generator_tool, list_artifacts_tool, save_inline_media_tool, rename_media_artifact_tool, make_public_tool, poll_fal_tool]
 
 root_agent = Agent(
     name="root_agent",
